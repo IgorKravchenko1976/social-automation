@@ -27,8 +27,6 @@
     ".imin-msg.bot{background:#262640;color:#e2e8f0;align-self:flex-start;border-bottom-left-radius:4px}",
     ".imin-msg.user{background:linear-gradient(135deg,#6ee7b7,#3b82f6);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}",
     ".imin-msg.typing{background:#262640;color:#94a3b8;align-self:flex-start;border-bottom-left-radius:4px;font-style:italic}",
-    ".imin-tg-link{display:flex;align-items:center;gap:6px;color:#2AABEE;text-decoration:none;font-size:13px;padding:6px 12px;background:rgba(42,171,238,.1);border-radius:10px;margin-top:4px;align-self:flex-start;transition:background .2s}",
-    ".imin-tg-link:hover{background:rgba(42,171,238,.2)}",
     "#imin-chat-input{display:flex;padding:12px;gap:8px;border-top:1px solid rgba(255,255,255,.06);flex-shrink:0;background:#1a1a2e}",
     "#imin-chat-input input{flex:1;background:#262640;border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:10px 16px;color:#e2e8f0;font-size:14px;outline:none;transition:border-color .2s}",
     "#imin-chat-input input:focus{border-color:rgba(110,231,183,.4)}",
@@ -96,16 +94,6 @@
       "Привіт! 👋 Я AI-помічник додатку I'M IN. Запитайте мене будь-що про додаток!",
       "bot"
     );
-    var link = document.createElement("a");
-    link.className = "imin-tg-link";
-    link.href = TG_BOT_URL;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="#2AABEE"><path d="M11.944 0A12 12 0 1 0 24 12.056A12.014 12.014 0 0 0 11.944 0ZM16.906 7.224c.1-.002.321.039.465.178a.66.66 0 0 1 .193.44c.01.066.023.21.013.326c-.123 1.28-.654 4.382-.924 5.813c-.114.606-.338.809-.555.829c-.473.044-.832-.312-1.29-.612c-.714-.469-1.118-.761-1.812-1.22c-.8-.529-.282-.82.174-1.294c.12-.124 2.19-2.008 2.231-2.179a.166.166 0 0 0-.039-.152c-.053-.044-.13-.029-.186-.017c-.08.017-1.346.855-3.8 2.51c-.36.247-.685.367-.978.361c-.322-.007-.94-.182-1.4-.331c-.566-.184-.929-.28-.893-.593c.018-.163.218-.33.6-.498c2.35-1.023 3.917-1.698 4.702-2.023c2.24-.93 2.704-1.092 3.008-1.097Z"/></svg>' +
-      "Написати в Telegram";
-    messagesDiv.appendChild(link);
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
   }
 
   async function sendMessage() {
