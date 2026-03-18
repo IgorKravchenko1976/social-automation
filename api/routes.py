@@ -1,0 +1,250 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import select, func, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from config.platforms import Platform
+from db.database import get_session
+from db.models import Post, Publication, PostStatus, Message, MessageDirection, RSSSource
+
+router = APIRouter(prefix="/api", tags=["admin"])
+
+
+# ── Pydantic schemas ──────────────────────────────────────────────────────────
+
+class PostOut(BaseModel):
+    id: int
+    title: Optional[str]
+    content_raw: str
+    source: str
+    image_path: Optional[str]
+    scheduled_at: Optional[datetime]
+    created_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class PublicationOut(BaseModel):
+    id: int
+    post_id: int
+    platform: str
+    status: str
+    platform_post_id: Optional[str]
+    content_adapted: Optional[str]
+    error_message: Optional[str]
+    retry_count: int
+    published_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class MessageOut(BaseModel):
+    id: int
+    platform: str
+    sender_name: Optional[str]
+    direction: str
+    text: Optional[str]
+    category: Optional[str]
+    replied: bool
+    created_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class CreatePostRequest(BaseModel):
+    title: Optional[str] = None
+    content: str
+    platforms: list[str] = ["telegram", "facebook", "twitter", "instagram", "tiktok"]
+    scheduled_at: Optional[datetime] = None
+
+
+class AddRSSSourceRequest(BaseModel):
+    name: str
+    url: str
+
+
+class StatsOut(BaseModel):
+    total_posts: int
+    published: int
+    failed: int
+    queued: int
+    total_messages_in: int
+    total_messages_out: int
+    messages_unanswered: int
+
+
+# ── Posts ─────────────────────────────────────────────────────────────────────
+
+@router.get("/posts", response_model=list[PostOut])
+async def list_posts(
+    limit: int = Query(20, le=100),
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Post).order_by(desc(Post.created_at)).offset(offset).limit(limit)
+    )
+    return result.scalars().all()
+
+
+@router.post("/posts", response_model=PostOut, status_code=201)
+async def create_post(body: CreatePostRequest, session: AsyncSession = Depends(get_session)):
+    post = Post(
+        title=body.title,
+        content_raw=body.content,
+        source="manual",
+        scheduled_at=body.scheduled_at,
+    )
+    session.add(post)
+    await session.flush()
+
+    for p in body.platforms:
+        try:
+            Platform(p)
+        except ValueError:
+            raise HTTPException(400, f"Unknown platform: {p}")
+        pub = Publication(post_id=post.id, platform=p, status=PostStatus.QUEUED)
+        session.add(pub)
+
+    await session.commit()
+    await session.refresh(post)
+    return post
+
+
+@router.get("/posts/{post_id}/publications", response_model=list[PublicationOut])
+async def get_publications(post_id: int, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(
+        select(Publication).where(Publication.post_id == post_id)
+    )
+    return result.scalars().all()
+
+
+# ── Publications queue ────────────────────────────────────────────────────────
+
+@router.get("/queue", response_model=list[PublicationOut])
+async def get_queue(session: AsyncSession = Depends(get_session)):
+    result = await session.execute(
+        select(Publication)
+        .where(Publication.status.in_([PostStatus.QUEUED, PostStatus.PUBLISHING]))
+        .order_by(Publication.created_at)
+    )
+    return result.scalars().all()
+
+
+# ── Messages ──────────────────────────────────────────────────────────────────
+
+@router.get("/messages", response_model=list[MessageOut])
+async def list_messages(
+    platform: Optional[str] = None,
+    unanswered: bool = False,
+    limit: int = Query(50, le=200),
+    session: AsyncSession = Depends(get_session),
+):
+    q = select(Message).order_by(desc(Message.created_at)).limit(limit)
+    if platform:
+        q = q.where(Message.platform == platform)
+    if unanswered:
+        q = q.where(
+            Message.direction == MessageDirection.INCOMING,
+            Message.replied == False,
+        )
+    result = await session.execute(q)
+    return result.scalars().all()
+
+
+# ── RSS Sources ───────────────────────────────────────────────────────────────
+
+@router.get("/rss", response_model=list[dict])
+async def list_rss_sources(session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(RSSSource))
+    sources = result.scalars().all()
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "url": s.url,
+            "enabled": s.enabled,
+            "last_fetched_at": s.last_fetched_at,
+        }
+        for s in sources
+    ]
+
+
+@router.post("/rss", status_code=201)
+async def add_rss_source(body: AddRSSSourceRequest, session: AsyncSession = Depends(get_session)):
+    source = RSSSource(name=body.name, url=body.url)
+    session.add(source)
+    await session.commit()
+    return {"id": source.id, "name": source.name, "url": source.url}
+
+
+@router.delete("/rss/{source_id}")
+async def delete_rss_source(source_id: int, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(RSSSource).where(RSSSource.id == source_id))
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(404, "RSS source not found")
+    await session.delete(source)
+    await session.commit()
+    return {"deleted": True}
+
+
+# ── Stats ─────────────────────────────────────────────────────────────────────
+
+@router.get("/stats", response_model=StatsOut)
+async def get_stats(session: AsyncSession = Depends(get_session)):
+    total_posts = (await session.execute(select(func.count(Post.id)))).scalar() or 0
+
+    published = (
+        await session.execute(
+            select(func.count(Publication.id)).where(Publication.status == PostStatus.PUBLISHED)
+        )
+    ).scalar() or 0
+
+    failed = (
+        await session.execute(
+            select(func.count(Publication.id)).where(Publication.status == PostStatus.FAILED)
+        )
+    ).scalar() or 0
+
+    queued = (
+        await session.execute(
+            select(func.count(Publication.id)).where(Publication.status == PostStatus.QUEUED)
+        )
+    ).scalar() or 0
+
+    msgs_in = (
+        await session.execute(
+            select(func.count(Message.id)).where(Message.direction == MessageDirection.INCOMING)
+        )
+    ).scalar() or 0
+
+    msgs_out = (
+        await session.execute(
+            select(func.count(Message.id)).where(Message.direction == MessageDirection.OUTGOING)
+        )
+    ).scalar() or 0
+
+    unanswered = (
+        await session.execute(
+            select(func.count(Message.id)).where(
+                Message.direction == MessageDirection.INCOMING,
+                Message.replied == False,
+            )
+        )
+    ).scalar() or 0
+
+    return StatsOut(
+        total_posts=total_posts,
+        published=published,
+        failed=failed,
+        queued=queued,
+        total_messages_in=msgs_in,
+        total_messages_out=msgs_out,
+        messages_unanswered=unanswered,
+    )

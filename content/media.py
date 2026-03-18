@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from pathlib import Path
+from typing import Optional
+
+import httpx
+from openai import AsyncOpenAI
+
+from config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+MEDIA_DIR = Path(settings.media_cache_dir)
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+async def download_image_pexels(query: str) -> Optional[str]:
+    """Download a relevant image from Pexels. Returns local file path or None."""
+    if not settings.pexels_api_key:
+        logger.warning("Pexels API key not configured")
+        return None
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            "https://api.pexels.com/v1/search",
+            params={"query": query, "per_page": 1, "orientation": "landscape"},
+            headers={"Authorization": settings.pexels_api_key},
+        )
+        if resp.status_code != 200:
+            logger.error("Pexels API error: %s", resp.text)
+            return None
+
+        data = resp.json()
+        photos = data.get("photos", [])
+        if not photos:
+            return None
+
+        image_url = photos[0]["src"]["large"]
+        img_resp = await client.get(image_url)
+        if img_resp.status_code != 200:
+            return None
+
+        filename = f"pexels_{uuid.uuid4().hex[:8]}.jpg"
+        filepath = MEDIA_DIR / filename
+        filepath.write_bytes(img_resp.content)
+        return str(filepath)
+
+
+async def generate_image_dalle(prompt: str) -> Optional[str]:
+    """Generate an image via DALL-E 3. Returns local file path or None."""
+    if not settings.openai_api_key:
+        return None
+
+    try:
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1,
+        )
+        image_url = response.data[0].url
+
+        async with httpx.AsyncClient(timeout=60) as http_client:
+            img_resp = await http_client.get(image_url)
+            if img_resp.status_code != 200:
+                return None
+
+            filename = f"dalle_{uuid.uuid4().hex[:8]}.png"
+            filepath = MEDIA_DIR / filename
+            filepath.write_bytes(img_resp.content)
+            return str(filepath)
+    except Exception:
+        logger.exception("DALL-E image generation failed")
+        return None
+
+
+async def get_image_for_post(query: str, use_dalle: bool = False) -> Optional[str]:
+    """Get an image for a post: try Pexels first, fallback to DALL-E if enabled."""
+    path = await download_image_pexels(query)
+    if path:
+        return path
+
+    if use_dalle:
+        from content.generator import generate_image_prompt
+        prompt = await generate_image_prompt(query)
+        return await generate_image_dalle(prompt)
+
+    return None
+
+
+async def create_slideshow_video(
+    image_paths: list[str],
+    text_overlay: str = "",
+    duration_per_image: float = 3.0,
+) -> Optional[str]:
+    """Create a simple slideshow video from images for TikTok."""
+    try:
+        from moviepy import ImageClip, concatenate_videoclips, TextClip, CompositeVideoClip
+
+        clips = []
+        for img_path in image_paths:
+            clip = ImageClip(img_path, duration=duration_per_image)
+            clips.append(clip)
+
+        if not clips:
+            return None
+
+        video = concatenate_videoclips(clips, method="compose")
+
+        if text_overlay:
+            txt_clip = TextClip(
+                text=text_overlay,
+                font_size=40,
+                color="white",
+                bg_color="rgba(0,0,0,0.5)",
+                size=(video.w - 40, None),
+                method="caption",
+            )
+            txt_clip = txt_clip.with_duration(video.duration).with_position("bottom")
+            video = CompositeVideoClip([video, txt_clip])
+
+        filename = f"slideshow_{uuid.uuid4().hex[:8]}.mp4"
+        filepath = MEDIA_DIR / filename
+        video.write_videofile(
+            str(filepath),
+            fps=24,
+            codec="libx264",
+            audio=False,
+            logger=None,
+        )
+        video.close()
+        return str(filepath)
+    except Exception:
+        logger.exception("Video creation failed")
+        return None
