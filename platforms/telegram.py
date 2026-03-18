@@ -210,7 +210,16 @@ async def _polling_loop() -> None:
             if offset:
                 params["offset"] = offset
             resp = await _http_client.post(_api_url("getUpdates"), json=params, timeout=45)
+            raw_body = resp.text
             data = resp.json()
+
+            logger.info(
+                "=== BOT v3 === getUpdates status=%s body_len=%d updates=%d body_preview=%s",
+                resp.status_code,
+                len(raw_body),
+                len(data.get("result", [])) if data.get("ok") else -1,
+                raw_body[:300],
+            )
 
             if not data.get("ok"):
                 logger.error("=== BOT v3 === getUpdates error: %s", json.dumps(data))
