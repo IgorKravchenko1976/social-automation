@@ -63,6 +63,15 @@ class CreatePostRequest(BaseModel):
     scheduled_at: Optional[datetime] = None
 
 
+class ChatRequest(BaseModel):
+    message: str
+    sender_name: str = "visitor"
+
+
+class ChatResponse(BaseModel):
+    reply: str
+
+
 class AddRSSSourceRequest(BaseModel):
     name: str
     url: str
@@ -192,6 +201,28 @@ async def delete_rss_source(source_id: int, session: AsyncSession = Depends(get_
     await session.delete(source)
     await session.commit()
     return {"deleted": True}
+
+
+# ── Web Chat ──────────────────────────────────────────────────────────────────
+
+@router.post("/chat", response_model=ChatResponse)
+async def web_chat(body: ChatRequest):
+    """Public chat endpoint for the website widget."""
+    from content.generator import generate_auto_reply
+
+    try:
+        reply_text, category = await generate_auto_reply(
+            incoming_message=body.message,
+            platform=Platform.TELEGRAM,
+            sender_name=body.sender_name,
+        )
+        if category == "spam":
+            return ChatResponse(reply="Дякую за повідомлення!")
+        return ChatResponse(reply=reply_text)
+    except Exception:
+        return ChatResponse(
+            reply="Дякую за повідомлення! Наша команда скоро відповість. 🙏"
+        )
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
