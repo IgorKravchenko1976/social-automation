@@ -12,8 +12,10 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-MEDIA_DIR = Path(settings.media_cache_dir)
-MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+def _get_media_dir() -> Path:
+    d = Path(settings.media_cache_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 async def download_image_pexels(query: str) -> Optional[str]:
@@ -43,7 +45,7 @@ async def download_image_pexels(query: str) -> Optional[str]:
             return None
 
         filename = f"pexels_{uuid.uuid4().hex[:8]}.jpg"
-        filepath = MEDIA_DIR / filename
+        filepath = _get_media_dir() / filename
         filepath.write_bytes(img_resp.content)
         return str(filepath)
 
@@ -70,7 +72,7 @@ async def generate_image_dalle(prompt: str) -> Optional[str]:
                 return None
 
             filename = f"dalle_{uuid.uuid4().hex[:8]}.png"
-            filepath = MEDIA_DIR / filename
+            filepath = _get_media_dir() / filename
             filepath.write_bytes(img_resp.content)
             return str(filepath)
     except Exception:
@@ -124,7 +126,7 @@ async def create_slideshow_video(
             video = CompositeVideoClip([video, txt_clip])
 
         filename = f"slideshow_{uuid.uuid4().hex[:8]}.mp4"
-        filepath = MEDIA_DIR / filename
+        filepath = _get_media_dir() / filename
         video.write_videofile(
             str(filepath),
             fps=24,
