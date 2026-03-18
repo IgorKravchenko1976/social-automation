@@ -173,6 +173,22 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors from the bot dispatcher."""
+    logger.error("Telegram bot error: %s", context.error, exc_info=context.error)
+
+
+async def _log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log every incoming update for debugging."""
+    logger.info(
+        "RAW UPDATE id=%s: message=%s, channel_post=%s, chat_type=%s",
+        update.update_id,
+        bool(update.message),
+        bool(update.channel_post),
+        update.message.chat.type if update.message else "N/A",
+    )
+
+
 async def start_telegram_bot() -> None:
     """Start the Telegram bot with polling (runs in background)."""
     global _application
@@ -187,16 +203,21 @@ async def start_telegram_bot() -> None:
         .build()
     )
 
+    _application.add_handler(MessageHandler(filters.ALL, _log_update), group=-1)
     _application.add_handler(CommandHandler("start", _handle_start))
     _application.add_handler(CommandHandler("help", _handle_start))
     _application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message)
     )
+    _application.add_error_handler(_error_handler)
 
     logger.info("Starting Telegram bot polling...")
     await _application.initialize()
     await _application.start()
-    await _application.updater.start_polling(drop_pending_updates=True)
+    await _application.updater.start_polling(
+        allowed_updates=["message", "channel_post", "edited_message"],
+        drop_pending_updates=False,
+    )
     logger.info("Telegram bot is listening for messages!")
 
 
