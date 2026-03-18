@@ -8,6 +8,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    TypeHandler,
     filters,
     ContextTypes,
 )
@@ -178,15 +179,19 @@ async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.error("Telegram bot error: %s", context.error, exc_info=context.error)
 
 
-async def _log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log every incoming update for debugging."""
-    logger.info(
-        "RAW UPDATE id=%s: message=%s, channel_post=%s, chat_type=%s",
-        update.update_id,
-        bool(update.message),
-        bool(update.channel_post),
-        update.message.chat.type if update.message else "N/A",
-    )
+async def _log_update(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log every incoming update for debugging (catches ALL update types)."""
+    if isinstance(update, Update):
+        logger.info(
+            ">>> RAW UPDATE id=%s: message=%s, channel_post=%s, chat_type=%s, text=%s",
+            update.update_id,
+            bool(update.message),
+            bool(update.channel_post),
+            update.message.chat.type if update.message else "N/A",
+            (update.message.text or "")[:50] if update.message else "",
+        )
+    else:
+        logger.info(">>> RAW UPDATE (non-Update type): %s", type(update))
 
 
 async def start_telegram_bot() -> None:
@@ -203,7 +208,7 @@ async def start_telegram_bot() -> None:
         .build()
     )
 
-    _application.add_handler(MessageHandler(filters.ALL, _log_update), group=-1)
+    _application.add_handler(TypeHandler(Update, _log_update), group=-1)
     _application.add_handler(CommandHandler("start", _handle_start))
     _application.add_handler(CommandHandler("help", _handle_start))
     _application.add_handler(
@@ -211,14 +216,14 @@ async def start_telegram_bot() -> None:
     )
     _application.add_error_handler(_error_handler)
 
-    logger.info("Starting Telegram bot polling...")
+    logger.info("=== TELEGRAM BOT v2 DEBUG === Starting polling...")
     await _application.initialize()
     await _application.start()
     await _application.updater.start_polling(
-        allowed_updates=["message", "channel_post", "edited_message"],
+        allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=False,
     )
-    logger.info("Telegram bot is listening for messages!")
+    logger.info("=== TELEGRAM BOT v2 DEBUG === Listening for messages!")
 
 
 async def stop_telegram_bot() -> None:
