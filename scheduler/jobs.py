@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.platforms import Platform, PLATFORM_LIMITS
@@ -38,6 +38,26 @@ def get_platform_instance(platform: Platform):
         Platform.TIKTOK: TikTokPlatform,
     }
     return _registry[platform]()
+
+
+async def ensure_daily_posts_exist() -> None:
+    """Create today's posts if they don't exist yet (called at startup)."""
+    tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(tz)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(sa_func.count(Post.id)).where(Post.created_at >= today_start_utc)
+        )
+        count = result.scalar() or 0
+
+    if count == 0:
+        logger.info("No posts found for today — creating them now at startup")
+        await create_daily_posts()
+    else:
+        logger.info("Found %d post(s) for today — skipping startup creation", count)
 
 
 _feature_index = 0
