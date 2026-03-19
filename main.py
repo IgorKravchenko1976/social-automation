@@ -207,6 +207,7 @@ async def test_facebook():
             "status": "ok",
             "page_id": page_id,
             "page_info": page_data,
+            "token_type": debug_data.get("type", "unknown"),
             "token_scopes": debug_data.get("scopes", []),
             "token_valid": debug_data.get("is_valid", False),
             "token_expires": debug_data.get("expires_at"),

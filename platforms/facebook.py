@@ -18,8 +18,8 @@ class FacebookPlatform(BasePlatform):
     platform = Platform.FACEBOOK
 
     @property
-    def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {settings.facebook_page_access_token}"}
+    def _token(self) -> str:
+        return settings.facebook_page_access_token
 
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
         try:
@@ -29,11 +29,14 @@ class FacebookPlatform(BasePlatform):
 
                 resp = await client.post(
                     f"{GRAPH_API_BASE}/{settings.facebook_page_id}/feed",
-                    headers=self._headers,
+                    params={"access_token": self._token},
                     json={"message": text},
                 )
-                resp.raise_for_status()
                 data = resp.json()
+                if "error" in data:
+                    err = data["error"].get("message", str(data["error"]))
+                    logger.error("Facebook publish error: %s", err)
+                    return PublishResult(success=False, error=err)
                 return PublishResult(success=True, platform_post_id=data.get("id"))
         except Exception as e:
             logger.exception("Facebook publish failed")
@@ -45,12 +48,15 @@ class FacebookPlatform(BasePlatform):
         with open(image_path, "rb") as f:
             resp = await client.post(
                 f"{GRAPH_API_BASE}/{settings.facebook_page_id}/photos",
-                headers=self._headers,
+                params={"access_token": self._token},
                 data={"message": text},
                 files={"source": ("image.jpg", f, "image/jpeg")},
             )
-        resp.raise_for_status()
         data = resp.json()
+        if "error" in data:
+            err = data["error"].get("message", str(data["error"]))
+            logger.error("Facebook photo publish error: %s", err)
+            return PublishResult(success=False, error=err)
         return PublishResult(success=True, platform_post_id=data.get("id"))
 
     async def publish_video(self, text: str, video_path: str) -> PublishResult:
@@ -59,12 +65,14 @@ class FacebookPlatform(BasePlatform):
                 with open(video_path, "rb") as f:
                     resp = await client.post(
                         f"{GRAPH_API_BASE}/{settings.facebook_page_id}/videos",
-                        headers=self._headers,
+                        params={"access_token": self._token},
                         data={"description": text},
                         files={"source": ("video.mp4", f, "video/mp4")},
                     )
-                resp.raise_for_status()
                 data = resp.json()
+                if "error" in data:
+                    err = data["error"].get("message", str(data["error"]))
+                    return PublishResult(success=False, error=err)
                 return PublishResult(success=True, platform_post_id=data.get("id"))
         except Exception as e:
             logger.exception("Facebook video publish failed")
@@ -76,11 +84,16 @@ class FacebookPlatform(BasePlatform):
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(
                     f"{GRAPH_API_BASE}/{settings.facebook_page_id}/feed",
-                    headers=self._headers,
-                    params={"fields": "id,comments{id,from,message,created_time}", "limit": 5},
+                    params={
+                        "access_token": self._token,
+                        "fields": "id,comments{id,from,message,created_time}",
+                        "limit": 5,
+                    },
                 )
-                resp.raise_for_status()
                 data = resp.json()
+                if "error" in data:
+                    logger.error("Facebook fetch messages error: %s", data["error"])
+                    return []
 
                 messages = []
                 for post in data.get("data", []):
@@ -101,10 +114,13 @@ class FacebookPlatform(BasePlatform):
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
                     f"{GRAPH_API_BASE}/{platform_message_id}/comments",
-                    headers=self._headers,
+                    params={"access_token": self._token},
                     json={"message": text},
                 )
-                resp.raise_for_status()
+                data = resp.json()
+                if "error" in data:
+                    logger.error("Facebook reply error: %s", data["error"])
+                    return False
                 return True
         except Exception:
             logger.exception("Facebook reply failed")
