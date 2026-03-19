@@ -45,11 +45,9 @@ class Settings(BaseSettings):
     app_description: str = "An awesome application"
     app_website: str = "https://example.com"
 
-    # Email reports
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
+    # Email reports (Resend HTTP API — works on Railway without SMTP)
+    resend_api_key: str = ""
+    report_email_from: str = "I'M IN Reports <onboarding@resend.dev>"
     report_email_to: str = ""
 
     # Scheduling

@@ -1,18 +1,16 @@
-"""Generate HTML email report and send via SMTP."""
+"""Generate HTML email report and send via Resend HTTP API."""
 from __future__ import annotations
 
 import base64
 import io
 import logging
 from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
 
+import httpx
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 from sqlalchemy import select
 
@@ -261,16 +259,16 @@ def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str) 
 
 
 async def send_daily_report() -> None:
-    """Collect stats, build report, send email."""
+    """Collect stats, build report, send email via Resend."""
     from stats.collector import collect_all_stats
 
-    if not settings.smtp_user or not settings.report_email_to:
-        logger.warning("SMTP not configured (user=%r, to=%r) — skipping",
-                        settings.smtp_user, settings.report_email_to)
+    if not settings.resend_api_key or not settings.report_email_to:
+        logger.warning("Resend not configured (key=%s, to=%r) — skipping",
+                        "set" if settings.resend_api_key else "missing",
+                        settings.report_email_to)
         return
 
-    logger.info("=== REPORT === Starting for %s → %s",
-                settings.smtp_user, settings.report_email_to)
+    logger.info("=== REPORT === Starting → %s", settings.report_email_to)
 
     logger.info("=== REPORT === Collecting daily stats...")
     today_stats = await collect_all_stats()
@@ -284,24 +282,23 @@ async def send_daily_report() -> None:
     logger.info("=== REPORT === Building HTML...")
     html = _build_html(today_stats, month_data, date_str)
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"I'M IN — Звіт за {date_str}"
-    msg["From"] = settings.smtp_user
-    msg["To"] = settings.report_email_to
-    msg.attach(MIMEText(html, "html", "utf-8"))
-
-    logger.info("=== REPORT === Sending via %s:%s ...", settings.smtp_host, settings.smtp_port)
-    import aiosmtplib
-
-    use_tls = settings.smtp_port == 465
-    await aiosmtplib.send(
-        msg,
-        hostname=settings.smtp_host,
-        port=settings.smtp_port,
-        start_tls=not use_tls,
-        use_tls=use_tls,
-        username=settings.smtp_user,
-        password=settings.smtp_password,
-        timeout=30,
-    )
-    logger.info("=== REPORT === Sent to %s", settings.report_email_to)
+    logger.info("=== REPORT === Sending via Resend API...")
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {settings.resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": settings.report_email_from,
+                "to": [settings.report_email_to],
+                "subject": f"I'M IN — Звіт за {date_str}",
+                "html": html,
+            },
+        )
+        if resp.status_code in (200, 201):
+            logger.info("=== REPORT === Sent to %s (id=%s)",
+                        settings.report_email_to, resp.json().get("id"))
+        else:
+            raise RuntimeError(f"Resend API error {resp.status_code}: {resp.text}")
