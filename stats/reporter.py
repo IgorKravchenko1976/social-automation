@@ -32,7 +32,7 @@ PLATFORM_LABELS = {
 PLATFORM_COLORS = {
     "telegram": "#2AABEE",
     "facebook": "#1877F2",
-    "twitter": "#000000",
+    "twitter": "#E7E9EA",
     "instagram": "#E4405F",
     "tiktok": "#00F2EA",
 }

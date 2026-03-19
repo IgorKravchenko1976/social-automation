@@ -58,15 +58,23 @@ class Settings(BaseSettings):
     webhook_base_url: str = "http://localhost:8000"
     webhook_secret: str = "change-me"
 
+    # Persistent data directory (mount Railway Volume here)
+    data_dir: str = "/data"
+
     # Database
-    database_url: str = Field(
-        default_factory=lambda: f"sqlite+aiosqlite:///{BASE_DIR / 'data' / 'social.db'}"
-    )
+    database_url: str = ""
 
     # Media cache
-    media_cache_dir: str = Field(
-        default_factory=lambda: str(BASE_DIR / "media_cache")
-    )
+    media_cache_dir: str = ""
+
+    def model_post_init(self, __context) -> None:
+        import pathlib
+        pathlib.Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+        if not self.database_url:
+            self.database_url = f"sqlite+aiosqlite:///{self.data_dir}/social.db"
+        if not self.media_cache_dir:
+            self.media_cache_dir = f"{self.data_dir}/media_cache"
+        pathlib.Path(self.media_cache_dir).mkdir(parents=True, exist_ok=True)
 
     model_config = {
         "env_file": str(BASE_DIR / ".env"),

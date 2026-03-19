@@ -10,7 +10,7 @@ import httpx
 from config.platforms import Platform
 from config.settings import settings
 from db.database import async_session
-from db.models import DailyStats, Publication, PostStatus
+from db.models import DailyStats, Publication, PostStatus, Message, MessageDirection
 
 from sqlalchemy import select, func as sa_func
 
@@ -31,11 +31,13 @@ async def _http_client() -> httpx.AsyncClient:
 
 
 async def _collect_telegram(date_str: str) -> dict:
-    """Fetch Telegram channel stats via Bot API."""
+    """Fetch Telegram channel stats via Bot API + DB."""
     stats = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
 
+    client = await _http_client()
+
+    # Subscribers
     try:
-        client = await _http_client()
         resp = await client.post(_tg_url("getChatMemberCount"),
                                   json={"chat_id": settings.telegram_channel_id})
         data = resp.json()
@@ -45,6 +47,7 @@ async def _collect_telegram(date_str: str) -> dict:
         logger.exception("Failed to get Telegram subscriber count")
 
     async with async_session() as session:
+        # Posts published today
         result = await session.execute(
             select(sa_func.count(Publication.id)).where(
                 Publication.platform == Platform.TELEGRAM.value,
@@ -53,6 +56,17 @@ async def _collect_telegram(date_str: str) -> dict:
             )
         )
         stats["posts"] = result.scalar() or 0
+
+        # Comments = incoming messages from users today
+        result = await session.execute(
+            select(sa_func.count(Message.id)).where(
+                Message.platform == Platform.TELEGRAM.value,
+                Message.direction == MessageDirection.INCOMING,
+                sa_func.date(Message.created_at) == date_str,
+            )
+        )
+        stats["comments"] = result.scalar() or 0
+
 
     return stats
 

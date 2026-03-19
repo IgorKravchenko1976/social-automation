@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /app/data /app/media_cache
+RUN mkdir -p /data
 
 ENV TZ=Europe/Kyiv
 ENV PORT=8000
