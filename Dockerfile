@@ -13,6 +13,7 @@ COPY . .
 
 RUN mkdir -p /app/data /app/media_cache
 
+ENV TZ=Europe/Kyiv
 ENV PORT=8000
 
 EXPOSE 8000

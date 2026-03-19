@@ -31,24 +31,26 @@ def _setup_scheduler() -> None:
     from messaging.monitor import poll_all_messages
     from messaging.responder import respond_to_pending_messages
 
-    # Generate daily content at 08:00
+    tz = settings.timezone
+    logger.info("Scheduler timezone: %s", tz)
+
     scheduler.add_job(
         create_daily_posts,
-        CronTrigger(hour=8, minute=0),
+        CronTrigger(hour=8, minute=0, timezone=tz),
         id="create_daily_posts",
         replace_existing=True,
     )
 
-    # Publish at configured times (default: 09:00, 13:00, 18:00)
     for idx, time_str in enumerate(settings.post_schedule):
         hour, minute = map(int, time_str.split(":"))
         scheduler.add_job(
             publish_scheduled_post,
-            CronTrigger(hour=hour, minute=minute),
+            CronTrigger(hour=hour, minute=minute, timezone=tz),
             args=[idx],
             id=f"publish_slot_{idx}",
             replace_existing=True,
         )
+        logger.info("Publish slot %d scheduled at %s:%s %s", idx, time_str, "00", tz)
 
     # Poll messages every 5 minutes
     scheduler.add_job(
