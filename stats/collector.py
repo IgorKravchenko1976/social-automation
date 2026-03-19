@@ -47,7 +47,17 @@ async def _collect_telegram(date_str: str) -> dict:
         logger.exception("Failed to get Telegram subscriber count")
 
     async with async_session() as session:
-        # Posts published today
+        # Posts = channel_post entries (includes manual posts from the channel)
+        result = await session.execute(
+            select(sa_func.count(Message.id)).where(
+                Message.platform == Platform.TELEGRAM.value,
+                Message.category == "channel_post",
+                sa_func.date(Message.created_at) == date_str,
+            )
+        )
+        posts_from_channel = result.scalar() or 0
+
+        # Also count our own scheduler publications
         result = await session.execute(
             select(sa_func.count(Publication.id)).where(
                 Publication.platform == Platform.TELEGRAM.value,
@@ -55,18 +65,18 @@ async def _collect_telegram(date_str: str) -> dict:
                 sa_func.date(Publication.published_at) == date_str,
             )
         )
-        stats["posts"] = result.scalar() or 0
+        posts_from_scheduler = result.scalar() or 0
+        stats["posts"] = max(posts_from_channel, posts_from_scheduler)
 
-        # Comments = incoming messages from users today
+        # Comments = discussion group messages (category="comment")
         result = await session.execute(
             select(sa_func.count(Message.id)).where(
                 Message.platform == Platform.TELEGRAM.value,
-                Message.direction == MessageDirection.INCOMING,
+                Message.category == "comment",
                 sa_func.date(Message.created_at) == date_str,
             )
         )
         stats["comments"] = result.scalar() or 0
-
 
     return stats
 

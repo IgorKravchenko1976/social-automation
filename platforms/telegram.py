@@ -91,17 +91,53 @@ class TelegramPlatform(BasePlatform):
             return False
 
 
-# ── Manual polling loop ──────────────────────────────────────────────────────
+# ── Channel post tracking ────────────────────────────────────────────────────
+
+async def _track_channel_post(post: dict) -> None:
+    """Save a channel post to DB for stats tracking (no reply needed)."""
+    text = post.get("text") or post.get("caption") or ""
+    message_id = post.get("message_id")
+    views = post.get("views", 0)
+    chat = post.get("chat", {})
+
+    logger.info("Channel post #%s in %s: %s (views=%d)",
+                message_id, chat.get("title", "?"), text[:60], views)
+
+    try:
+        from db.database import async_session
+        from db.models import Message as MsgModel, MessageDirection
+
+        async with async_session() as session:
+            msg = MsgModel(
+                platform="telegram",
+                platform_message_id=str(message_id) if message_id else None,
+                sender_id="channel",
+                sender_name=chat.get("title", "channel"),
+                direction=MessageDirection.OUTGOING,
+                text=text[:500] if text else None,
+                category="channel_post",
+            )
+            session.add(msg)
+            await session.commit()
+    except Exception:
+        logger.exception("Failed to save channel post to DB")
+
+
+# ── Message processing ───────────────────────────────────────────────────────
 
 async def _process_message(message: dict) -> None:
     """Process an incoming message and generate AI reply."""
     text = message.get("text", "")
     chat_id = message["chat"]["id"]
+    chat_type = message["chat"].get("type", "private")
     from_user = message.get("from", {})
     sender_name = from_user.get("first_name", "")
     message_id = message.get("message_id")
 
-    logger.info("Processing message from %s (chat %s): %s", sender_name, chat_id, text[:100])
+    is_group_comment = chat_type in ("group", "supergroup")
+
+    logger.info("Processing message from %s (chat %s, type=%s): %s",
+                sender_name, chat_id, chat_type, text[:100])
 
     # Handle /start and /help
     if text.startswith("/start") or text.startswith("/help"):
@@ -131,6 +167,7 @@ async def _process_message(message: dict) -> None:
                 sender_name=sender_name,
                 direction=MessageDirection.INCOMING,
                 text=text,
+                category="comment" if is_group_comment else None,
                 replied=False,
             )
             session.add(msg)
@@ -234,7 +271,15 @@ async def _polling_loop() -> None:
                 offset = upd["update_id"] + 1
                 logger.info("=== BOT v3 === Update %s: keys=%s", upd["update_id"], list(upd.keys()))
 
-                msg = upd.get("message") or upd.get("channel_post")
+                channel_post = upd.get("channel_post")
+                if channel_post:
+                    try:
+                        await _track_channel_post(channel_post)
+                    except Exception:
+                        logger.exception("=== BOT v3 === Error tracking channel post %s", upd["update_id"])
+                    continue
+
+                msg = upd.get("message")
                 if msg and msg.get("text"):
                     try:
                         await _process_message(msg)
