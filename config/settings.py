@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     app_description: str = "An awesome application"
     app_website: str = "https://example.com"
 
+    # Email reports
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    report_email_to: str = ""
+
     # Scheduling
     post_times: str = "09:00,13:00,18:00"
     timezone: str = "Europe/Kyiv"

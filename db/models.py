@@ -84,3 +84,18 @@ class RSSSource(Base):
     enabled = Column(Boolean, default=True)
     last_fetched_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class DailyStats(Base):
+    __tablename__ = "daily_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String(10), nullable=False)       # YYYY-MM-DD
+    platform = Column(String(20), nullable=False)
+    subscribers = Column(Integer, default=0)
+    posts = Column(Integer, default=0)
+    comments = Column(Integer, default=0)
+    views = Column(Integer, default=0)
+    likes = Column(Integer, default=0)
+    dislikes = Column(Integer, default=0)
+    collected_at = Column(DateTime, server_default=func.now())

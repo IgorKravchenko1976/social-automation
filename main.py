@@ -30,6 +30,7 @@ def _setup_scheduler() -> None:
     from scheduler.jobs import create_daily_posts, publish_scheduled_post, retry_failed_publications
     from messaging.monitor import poll_all_messages
     from messaging.responder import respond_to_pending_messages
+    from stats.reporter import send_daily_report
 
     tz = settings.timezone
     logger.info("Scheduler timezone: %s", tz)
@@ -51,6 +52,14 @@ def _setup_scheduler() -> None:
             replace_existing=True,
         )
         logger.info("Publish slot %d scheduled at %s:%s %s", idx, time_str, "00", tz)
+
+    scheduler.add_job(
+        send_daily_report,
+        CronTrigger(hour=20, minute=0, timezone=tz),
+        id="daily_report",
+        replace_existing=True,
+    )
+    logger.info("Daily report scheduled at 20:00 %s → %s", tz, settings.report_email_to)
 
     # Poll messages every 5 minutes
     scheduler.add_job(
@@ -167,6 +176,14 @@ async def trigger_auto_reply():
     from messaging.responder import respond_to_pending_messages
     count = await respond_to_pending_messages()
     return {"status": "ok", "replied": count}
+
+
+@app.post("/api/trigger/daily-report")
+async def trigger_daily_report():
+    """Manually trigger the daily report email."""
+    from stats.reporter import send_daily_report
+    await send_daily_report()
+    return {"status": "ok", "message": f"Report sent to {settings.report_email_to}"}
 
 
 if __name__ == "__main__":
