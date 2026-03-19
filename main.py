@@ -187,7 +187,12 @@ async def trigger_daily_report():
         return {"status": "ok", "message": f"Report sent to {settings.report_email_to}"}
     except Exception as e:
         logger.exception("Daily report failed")
-        return {"status": "error", "error": str(e)}
+        return {
+            "status": "error",
+            "error": str(e),
+            "debug_to": settings.report_email_to,
+            "debug_resend_key_set": bool(settings.resend_api_key),
+        }
 
 
 if __name__ == "__main__":
