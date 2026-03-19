@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config.platforms import Platform, PLATFORM_LIMITS
 from config.settings import settings
 from content.generator import generate_post_text
+from content.product_knowledge import FEATURE_TOPICS
 from content.media import get_image_for_post, create_slideshow_video
 from content.rss_parser import parse_all_sources
 from db.database import async_session
@@ -39,21 +40,27 @@ def get_platform_instance(platform: Platform):
     return _registry[platform]()
 
 
+_feature_index = 0
+
+
+def _next_feature_topics(count: int) -> list[str]:
+    """Return *count* feature topics, cycling through the full list over days."""
+    global _feature_index
+    picked: list[str] = []
+    for _ in range(count):
+        picked.append(FEATURE_TOPICS[_feature_index % len(FEATURE_TOPICS)])
+        _feature_index += 1
+    return picked
+
+
 async def create_daily_posts() -> None:
-    """Generate 3 posts for today: 1 from RSS (if available) + 2 AI-generated."""
+    """Generate 3 posts for today: 1 from RSS (if available) + 2 AI-generated about app features."""
     async with async_session() as session:
         rss_entries = await parse_all_sources(session)
-
-        topics = [
-            f"New feature or update about {settings.app_name}",
-            f"Industry tip related to {settings.app_description}",
-            f"Engaging question or poll about {settings.app_description}",
-        ]
 
         posts_to_create = 3
         created = 0
 
-        # Use 1 RSS entry if available
         if rss_entries and created < posts_to_create:
             entry = rss_entries[0]
             post = Post(
@@ -70,9 +77,8 @@ async def create_daily_posts() -> None:
                 session.add(pub)
             created += 1
 
-        # Fill remaining with AI-generated
-        for i in range(created, posts_to_create):
-            topic = topics[i % len(topics)]
+        feature_topics = _next_feature_topics(posts_to_create - created)
+        for topic in feature_topics:
             post = Post(
                 title=topic,
                 content_raw=topic,
