@@ -178,6 +178,52 @@ async def trigger_auto_reply():
     return {"status": "ok", "replied": count}
 
 
+@app.get("/api/test/facebook")
+async def test_facebook():
+    """Test Facebook connection and token validity."""
+    import httpx
+    try:
+        token = settings.facebook_page_access_token
+        page_id = settings.facebook_page_id
+        if not token or token.startswith("your-"):
+            return {"status": "error", "error": "FACEBOOK_PAGE_ACCESS_TOKEN not configured"}
+        if not page_id or page_id.startswith("your-"):
+            return {"status": "error", "error": "FACEBOOK_PAGE_ID not configured"}
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"https://graph.facebook.com/v21.0/debug_token",
+                params={"input_token": token, "access_token": token},
+            )
+            debug_data = r.json().get("data", {})
+
+            r2 = await client.get(
+                f"https://graph.facebook.com/v21.0/{page_id}",
+                params={"fields": "name,id,followers_count", "access_token": token},
+            )
+            page_data = r2.json()
+
+        return {
+            "status": "ok",
+            "page_id": page_id,
+            "page_info": page_data,
+            "token_scopes": debug_data.get("scopes", []),
+            "token_valid": debug_data.get("is_valid", False),
+            "token_expires": debug_data.get("expires_at"),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@app.post("/api/test/facebook-post")
+async def test_facebook_post():
+    """Publish a test post to Facebook page."""
+    from platforms.facebook import FacebookPlatform
+    fb = FacebookPlatform()
+    result = await fb.publish_text("👋 Тестовий пост від I'M IN — автоматизація працює! 🚀\n\nСлідкуйте за новинами додатку для мандрівників.\n🌍 im-in.net")
+    return {"status": "ok" if result.success else "error", "post_id": result.platform_post_id, "error": result.error}
+
+
 @app.post("/api/trigger/daily-report")
 async def trigger_daily_report():
     """Manually trigger the daily report email."""
