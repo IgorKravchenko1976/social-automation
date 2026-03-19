@@ -93,7 +93,7 @@ def _make_monthly_chart(month_data: dict, metric_keys: list[str], title: str) ->
         fig.patch.set_facecolor("#1a1a2e")
         ax.set_facecolor("#1a1a2e")
 
-        months_sorted = sorted({m for p in month_data.values() for m in month_data[p]})
+        months_sorted = sorted({m for p in month_data.values() for m in p})
         if not months_sorted:
             months_sorted = [datetime.now().strftime("%Y-%m")]
 
@@ -175,7 +175,7 @@ def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str) 
     )
 
     # ── Block 3 table ──
-    months_sorted = sorted({m for p in month_data.values() for m in month_data[p]})
+    months_sorted = sorted({m for p in month_data.values() for m in p})
     month_headers = "".join(
         f'<th style="padding:8px 10px;color:#94a3b8;font-weight:400;">{m}</th>'
         for m in months_sorted
