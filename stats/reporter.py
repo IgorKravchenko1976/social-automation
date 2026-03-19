@@ -292,12 +292,16 @@ async def send_daily_report() -> None:
 
     logger.info("=== REPORT === Sending via %s:%s ...", settings.smtp_host, settings.smtp_port)
     import aiosmtplib
+
+    use_tls = settings.smtp_port == 465
     await aiosmtplib.send(
         msg,
         hostname=settings.smtp_host,
         port=settings.smtp_port,
-        start_tls=True,
+        start_tls=not use_tls,
+        use_tls=use_tls,
         username=settings.smtp_user,
         password=settings.smtp_password,
+        timeout=30,
     )
     logger.info("=== REPORT === Sent to %s", settings.report_email_to)
