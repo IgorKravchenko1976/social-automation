@@ -181,9 +181,13 @@ async def trigger_auto_reply():
 @app.post("/api/trigger/daily-report")
 async def trigger_daily_report():
     """Manually trigger the daily report email."""
-    from stats.reporter import send_daily_report
-    await send_daily_report()
-    return {"status": "ok", "message": f"Report sent to {settings.report_email_to}"}
+    try:
+        from stats.reporter import send_daily_report
+        await send_daily_report()
+        return {"status": "ok", "message": f"Report sent to {settings.report_email_to}"}
+    except Exception as e:
+        logger.exception("Daily report failed")
+        return {"status": "error", "error": str(e)}
 
 
 if __name__ == "__main__":

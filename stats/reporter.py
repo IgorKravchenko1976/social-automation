@@ -88,39 +88,55 @@ async def _load_monthly_totals(months: int = 6) -> dict:
 
 def _make_monthly_chart(month_data: dict, metric_keys: list[str], title: str) -> str:
     """Render a bar+line chart and return base64-encoded PNG."""
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    fig.patch.set_facecolor("#1a1a2e")
-    ax.set_facecolor("#1a1a2e")
+    try:
+        fig, ax = plt.subplots(figsize=(10, 4.5))
+        fig.patch.set_facecolor("#1a1a2e")
+        ax.set_facecolor("#1a1a2e")
 
-    months_sorted = sorted({m for p in month_data.values() for m in month_data[p]})
-    x_positions = range(len(months_sorted))
+        months_sorted = sorted({m for p in month_data.values() for m in month_data[p]})
+        if not months_sorted:
+            months_sorted = [datetime.now().strftime("%Y-%m")]
 
-    bar_width = 0.15
-    for idx, platform in enumerate(month_data):
-        values = [
-            sum(month_data[platform].get(m, {}).get(k, 0) for k in metric_keys)
-            for m in months_sorted
-        ]
-        if not any(values):
-            continue
-        color = PLATFORM_COLORS.get(platform, "#888888")
-        label = PLATFORM_LABELS.get(platform, platform)
-        offsets = [x + bar_width * idx for x in x_positions]
-        ax.bar(offsets, values, bar_width, label=label, color=color, alpha=0.85)
+        x_positions = list(range(len(months_sorted)))
 
-    ax.set_xticks([x + bar_width * 2 for x in x_positions])
-    ax.set_xticklabels(months_sorted, color="#94a3b8", fontsize=9)
-    ax.tick_params(axis="y", colors="#94a3b8")
-    ax.set_title(title, color="#e2e8f0", fontsize=13, pad=12)
-    ax.legend(facecolor="#262640", edgecolor="#333", labelcolor="#e2e8f0", fontsize=8)
-    ax.spines[:].set_visible(False)
-    ax.grid(axis="y", color="#333", alpha=0.3)
+        bar_width = 0.15
+        has_data = False
+        for idx, platform in enumerate(month_data):
+            values = [
+                sum(month_data[platform].get(m, {}).get(k, 0) for k in metric_keys)
+                for m in months_sorted
+            ]
+            if not any(values):
+                continue
+            has_data = True
+            color = PLATFORM_COLORS.get(platform, "#888888")
+            label = PLATFORM_LABELS.get(platform, platform)
+            offsets = [x + bar_width * idx for x in x_positions]
+            ax.bar(offsets, values, bar_width, label=label, color=color, alpha=0.85)
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=130, facecolor=fig.get_facecolor())
-    plt.close(fig)
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode()
+        if not has_data:
+            ax.text(0.5, 0.5, "No data yet", transform=ax.transAxes,
+                    ha="center", va="center", color="#64748b", fontsize=14)
+
+        ax.set_xticks([x + bar_width * 2 for x in x_positions])
+        ax.set_xticklabels(months_sorted, color="#94a3b8", fontsize=9)
+        ax.tick_params(axis="y", colors="#94a3b8")
+        ax.set_title(title, color="#e2e8f0", fontsize=13, pad=12)
+        if has_data:
+            ax.legend(facecolor="#262640", edgecolor="#333", labelcolor="#e2e8f0", fontsize=8)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.grid(axis="y", color="#333", alpha=0.3)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=130, facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode()
+    except Exception:
+        logger.exception("Failed to generate chart: %s", title)
+        plt.close("all")
+        return ""
 
 
 def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str) -> str:
@@ -249,19 +265,23 @@ async def send_daily_report() -> None:
     from stats.collector import collect_all_stats
 
     if not settings.smtp_user or not settings.report_email_to:
-        logger.warning("SMTP or report email not configured — skipping report")
+        logger.warning("SMTP not configured (user=%r, to=%r) — skipping",
+                        settings.smtp_user, settings.report_email_to)
         return
 
-    logger.info("Collecting daily stats...")
+    logger.info("=== REPORT === Starting for %s → %s",
+                settings.smtp_user, settings.report_email_to)
+
+    logger.info("=== REPORT === Collecting daily stats...")
     today_stats = await collect_all_stats()
 
     tz = ZoneInfo(settings.timezone)
     date_str = datetime.now(tz).strftime("%Y-%m-%d")
 
-    logger.info("Loading monthly data...")
+    logger.info("=== REPORT === Loading monthly data...")
     month_data = await _load_monthly_totals(months=6)
 
-    logger.info("Building report HTML...")
+    logger.info("=== REPORT === Building HTML...")
     html = _build_html(today_stats, month_data, date_str)
 
     msg = MIMEMultipart("alternative")
@@ -270,16 +290,14 @@ async def send_daily_report() -> None:
     msg["To"] = settings.report_email_to
     msg.attach(MIMEText(html, "html", "utf-8"))
 
-    try:
-        import aiosmtplib
-        await aiosmtplib.send(
-            msg,
-            hostname=settings.smtp_host,
-            port=settings.smtp_port,
-            start_tls=True,
-            username=settings.smtp_user,
-            password=settings.smtp_password,
-        )
-        logger.info("Daily report sent to %s", settings.report_email_to)
-    except Exception:
-        logger.exception("Failed to send daily report email")
+    logger.info("=== REPORT === Sending via %s:%s ...", settings.smtp_host, settings.smtp_port)
+    import aiosmtplib
+    await aiosmtplib.send(
+        msg,
+        hostname=settings.smtp_host,
+        port=settings.smtp_port,
+        start_tls=True,
+        username=settings.smtp_user,
+        password=settings.smtp_password,
+    )
+    logger.info("=== REPORT === Sent to %s", settings.report_email_to)
