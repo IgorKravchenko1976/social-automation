@@ -239,7 +239,7 @@ async def test_facebook_post():
     """Publish a test post to Facebook page."""
     from platforms.facebook import FacebookPlatform
     fb = FacebookPlatform()
-    result = await fb.publish_text("👋 Тестовий пост від I'M IN — автоматизація працює! 🚀\n\nСлідкуйте за новинами додатку для мандрівників.\n🌍 im-in.net")
+    result = await fb.publish_text("👋 Тестовий пост від I'M IN — автоматизація працює! 🚀\n\nСлідкуйте за новинами додатку для мандрівників.\n🌍 www.im-in.net")
     return {"status": "ok" if result.success else "error", "post_id": result.platform_post_id, "error": result.error}
 
 

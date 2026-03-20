@@ -144,7 +144,7 @@ async def _process_message(message: dict) -> None:
         reply = (
             "Привіт! \U0001f44b Я бот додатку I'M IN — додатку для мандрівників.\n\n"
             "Напиши мені будь-яке питання про додаток, і я відповім!\n\n"
-            "\U0001f30d Сайт: im-in.net\n"
+            "\U0001f30d Сайт: www.im-in.net\n"
             "\U0001f4f1 Скоро в App Store!"
         )
         platform = TelegramPlatform()

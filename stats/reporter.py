@@ -320,7 +320,7 @@ def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
   {token_section}
 
   <p style="color:#64748b;font-size:12px;margin-top:32px;text-align:center;">
-    Автоматичний звіт від I'M IN Social Automation • im-in.net
+    Автоматичний звіт від I'M IN Social Automation • www.im-in.net
   </p>
 </div>
 </body>
@@ -376,7 +376,7 @@ def _build_token_urgent_email(expiring: list) -> str:
   <h1 style="color:#f87171;font-size:28px;text-align:center;">🚨 УВАГА: ТОКЕНИ ЗАКІНЧУЮТЬСЯ</h1>
   {rows}
   <p style="color:#64748b;font-size:12px;margin-top:32px;text-align:center;">
-    I'M IN Social Automation • im-in.net
+    I'M IN Social Automation • www.im-in.net
   </p>
 </div></body></html>"""
 
