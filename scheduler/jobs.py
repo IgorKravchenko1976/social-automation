@@ -12,8 +12,9 @@ from config.platforms import Platform, PLATFORM_LIMITS
 from config.settings import settings
 from content.generator import generate_post_text
 from content.product_knowledge import FEATURE_TOPICS
+from content.tourism_topics import TOURISM_RSS_FEEDS, ACTIVE_SPORTS_PLACES, LEISURE_TRAVEL_PLACES
 from content.media import get_image_for_post, create_slideshow_video
-from content.rss_parser import parse_all_sources
+from content.rss_parser import parse_all_sources, fetch_feed
 from db.database import async_session
 from db.models import Post, Publication, PostStatus
 
@@ -94,62 +95,127 @@ async def publish_missed_slots() -> None:
 
 
 _feature_index = 0
+_active_index = 0
+_leisure_index = 0
 
 
-def _next_feature_topics(count: int) -> list[str]:
-    """Return *count* feature topics, cycling through the full list over days."""
-    global _feature_index
-    picked: list[str] = []
-    for _ in range(count):
-        picked.append(FEATURE_TOPICS[_feature_index % len(FEATURE_TOPICS)])
-        _feature_index += 1
-    return picked
+def _next_from_pool(pool: list[str], index_name: str) -> str:
+    """Pick the next item from a topic pool, cycling forever."""
+    g = globals()
+    idx = g.get(index_name, 0)
+    topic = pool[idx % len(pool)]
+    g[index_name] = idx + 1
+    return topic
+
+
+async def _fetch_tourism_news(session, count: int = 2) -> list[dict]:
+    """Fetch fresh tourism news from RSS feeds, returning up to *count* new entries."""
+    existing_urls_result = await session.execute(
+        select(Post.source_url).where(Post.source == "rss")
+    )
+    existing_urls = {row[0] for row in existing_urls_result.all() if row[0]}
+
+    all_entries: list[dict] = []
+    import random
+    feeds = list(TOURISM_RSS_FEEDS)
+    random.shuffle(feeds)
+
+    for name, url in feeds:
+        if len(all_entries) >= count:
+            break
+        try:
+            entries = await fetch_feed(url)
+            for entry in entries:
+                if entry["link"] and entry["link"] not in existing_urls:
+                    entry["source_name"] = name
+                    all_entries.append(entry)
+                    existing_urls.add(entry["link"])
+                    if len(all_entries) >= count:
+                        break
+        except Exception:
+            logger.warning("Failed to fetch RSS feed: %s", name)
+
+    return all_entries[:count]
 
 
 async def create_daily_posts() -> None:
-    """Generate 3 posts for today: 1 from RSS (if available) + 2 AI-generated about app features."""
+    """Generate 5 posts for today:
+    - 2 tourism news (from RSS feeds, with source links)
+    - 1 app feature
+    - 1 active sports/recreation place
+    - 1 leisure travel place
+    Order: news, active, news, feature, leisure
+    """
     async with async_session() as session:
-        rss_entries = await parse_all_sources(session)
+        created_posts: list[tuple[Post, str]] = []
 
-        posts_to_create = 3
-        created = 0
-
-        if rss_entries and created < posts_to_create:
-            entry = rss_entries[0]
+        # --- 2 Tourism news from RSS ---
+        news_entries = await _fetch_tourism_news(session, count=2)
+        for entry in news_entries:
+            source_name = entry.get("source_name", "")
+            content = (
+                f"{entry['title']}\n\n"
+                f"{entry.get('summary', '')}\n\n"
+                f"Джерело: {source_name}\n{entry['link']}"
+            )
             post = Post(
-                title=entry["title"],
-                content_raw=entry["summary"] or entry["title"],
+                title=entry["title"][:200],
+                content_raw=content,
                 source="rss",
                 source_url=entry["link"],
             )
             session.add(post)
             await session.flush()
-
             for platform in ALL_PLATFORMS:
-                pub = Publication(post_id=post.id, platform=platform.value)
-                session.add(pub)
-            created += 1
+                session.add(Publication(post_id=post.id, platform=platform.value))
+            created_posts.append((post, "tourism_news"))
 
-        feature_topics = _next_feature_topics(posts_to_create - created)
-        for topic in feature_topics:
-            post = Post(
-                title=topic,
-                content_raw=topic,
-                source="ai",
-            )
+        while len([p for p in created_posts if p[1] == "tourism_news"]) < 2:
+            topic = f"Актуальна туристична новина: цікавий тренд або подія у світі подорожей (#{_active_index + _leisure_index})"
+            post = Post(title=topic[:200], content_raw=topic, source="ai")
             session.add(post)
             await session.flush()
-
             for platform in ALL_PLATFORMS:
-                pub = Publication(post_id=post.id, platform=platform.value)
-                session.add(pub)
+                session.add(Publication(post_id=post.id, platform=platform.value))
+            created_posts.append((post, "tourism_news"))
+
+        # --- 1 Active sports/recreation place ---
+        active_topic = _next_from_pool(ACTIVE_SPORTS_PLACES, "_active_index")
+        post = Post(title=active_topic[:200], content_raw=active_topic, source="ai")
+        session.add(post)
+        await session.flush()
+        for platform in ALL_PLATFORMS:
+            session.add(Publication(post_id=post.id, platform=platform.value))
+        created_posts.append((post, "active_travel"))
+
+        # --- 1 App feature ---
+        feature_topic = _next_from_pool(FEATURE_TOPICS, "_feature_index")
+        post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
+        session.add(post)
+        await session.flush()
+        for platform in ALL_PLATFORMS:
+            session.add(Publication(post_id=post.id, platform=platform.value))
+        created_posts.append((post, "feature"))
+
+        # --- 1 Leisure travel place ---
+        leisure_topic = _next_from_pool(LEISURE_TRAVEL_PLACES, "_leisure_index")
+        post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
+        session.add(post)
+        await session.flush()
+        for platform in ALL_PLATFORMS:
+            session.add(Publication(post_id=post.id, platform=platform.value))
+        created_posts.append((post, "leisure_travel"))
 
         await session.commit()
-        logger.info("Created %d posts for today", posts_to_create)
+        logger.info(
+            "Created %d posts: %s",
+            len(created_posts),
+            ", ".join(ct for _, ct in created_posts),
+        )
 
 
 async def publish_scheduled_post(time_slot: int) -> None:
-    """Publish the post for a specific time slot (0, 1, or 2).
+    """Publish the post for a specific time slot (0-4).
 
     Picks today's post for the given slot index and publishes to all platforms.
     Falls back to any queued post if today's slot is unavailable.
@@ -211,6 +277,39 @@ async def publish_scheduled_post(time_slot: int) -> None:
         await session.commit()
 
 
+def _detect_content_type(post: Post) -> str:
+    """Determine content type from post title/content for correct AI prompt."""
+    if post.source == "rss":
+        return "tourism_news"
+    title = (post.title or "").lower()
+    content = (post.content_raw or "").lower()
+    text = title + " " + content
+
+    active_keywords = [
+        "f1", "formula", "tennis", "теніс", "marathon", "марафон",
+        "surf", "серф", "ski", "лиж", "golf", "гольф", "dive", "дайв",
+        "trek", "climb", "cycling", "вело", "sail", "вітрил", "race", "перегон",
+        "camp nou", "wembley", "wimbledon", "silverstone", "monza",
+        "le mans", "daytona", "nascar", "олімп", "olympic",
+        "football", "футбол", "base camp", "tour du mont",
+    ]
+    for kw in active_keywords:
+        if kw in text:
+            return "active_travel"
+
+    feature_keywords = [
+        "i'm in", "додаток", "карта", "маркер", "3d", "авто-режим",
+        "пакетне", "фільтр", "push", "діп-лінк", "гостьовий",
+        "біометри", "приватн", "черга завантаж", "мов", "радіус",
+        "коментар", "лайк", "профіл", "чат", "підпис",
+    ]
+    for kw in feature_keywords:
+        if kw in text:
+            return "feature"
+
+    return "leisure_travel"
+
+
 async def _publish_single(
     session: AsyncSession,
     post: Post,
@@ -222,13 +321,17 @@ async def _publish_single(
         pub.status = PostStatus.PUBLISHING
 
         if not pub.content_adapted:
+            content_type = _detect_content_type(post)
             if post.source == "rss":
                 pub.content_adapted = await generate_post_text(
-                    topic="", platform=platform, source_text=post.content_raw
+                    topic="", platform=platform,
+                    source_text=post.content_raw,
+                    content_type="tourism_news",
                 )
             else:
                 pub.content_adapted = await generate_post_text(
-                    topic=post.content_raw, platform=platform
+                    topic=post.content_raw, platform=platform,
+                    content_type=content_type,
                 )
 
         adapter = get_platform_instance(platform)

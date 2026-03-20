@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     report_email_to: str = ""
 
     # Scheduling
-    post_times: str = "09:00,13:00,18:00"
+    post_times: str = "08:00,10:00,12:00,15:00,18:00"
     timezone: str = "Europe/Kyiv"
 
     # Webhook
