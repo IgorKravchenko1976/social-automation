@@ -40,7 +40,8 @@ Website: {app_website}
 1. ТІЛЬКИ українською мовою.
 2. НЕ обіцяй конкретних дат запуску — лише "скоро" або "на фінішній прямій".
 3. Ніколи не вигадуй статистику.
-4. Хештеги тільки де платформа підтримує."""
+4. Хештеги тільки де платформа підтримує.
+5. Виведи ТІЛЬКИ текст посту. Жодних пояснень, вибачень, коментарів."""
 
 
 SYSTEM_PROMPT_TOURISM_NEWS = """You are a social-media content manager for a travel app "{app_name}".
@@ -94,7 +95,10 @@ Website: {app_website}
 4. Хештеги тільки де платформа підтримує.
 5. Не вигадуй фактів — перекажи тільки те що є в оригіналі.
 6. Якщо вся новина — чисто політична без туристичного контексту, напиши натомість
-   коротку корисну пораду для мандрівників (лайфхак, чеклист, порада для сезону)."""
+   цікаву туристичну пораду або факт про красиве місце для подорожей.
+7. КРИТИЧНО: НІКОЛИ не пиши "Вибачте", "Я не можу", "Ця новина", "На жаль" —
+   ти пишеш ГОТОВИЙ ПОСТ для соцмереж, а не відповідь на запитання.
+   Виведи ТІЛЬКИ текст посту, нічого більше. Жодних пояснень, коментарів, вибачень."""
 
 
 SYSTEM_PROMPT_ACTIVE_TRAVEL = """You are a social-media content manager for a travel app "{app_name}".
@@ -113,7 +117,8 @@ Website: {app_website}
 === ПРАВИЛА ===
 1. ТІЛЬКИ українською мовою.
 2. Не вигадуй факти — пиши тільки перевірену інформацію.
-3. Хештеги тільки де платформа підтримує."""
+3. Хештеги тільки де платформа підтримує.
+4. Виведи ТІЛЬКИ текст посту. Жодних пояснень, вибачень, коментарів."""
 
 
 SYSTEM_PROMPT_LEISURE_TRAVEL = """You are a social-media content manager for a travel app "{app_name}".
@@ -132,7 +137,8 @@ Website: {app_website}
 === ПРАВИЛА ===
 1. ТІЛЬКИ українською мовою.
 2. Не вигадуй факти.
-3. Хештеги тільки де платформа підтримує."""
+3. Хештеги тільки де платформа підтримує.
+4. Виведи ТІЛЬКИ текст посту. Жодних пояснень, вибачень, коментарів."""
 
 
 CONTENT_TYPE_PROMPTS = {
@@ -141,6 +147,32 @@ CONTENT_TYPE_PROMPTS = {
     "active_travel": SYSTEM_PROMPT_ACTIVE_TRAVEL,
     "leisure_travel": SYSTEM_PROMPT_LEISURE_TRAVEL,
 }
+
+
+import re
+
+_META_PATTERNS = [
+    r"(?i)^вибач(те|)[\s,.:!—–-].*?\n+",
+    r"(?i)^на жаль[\s,.:!—–-].*?\n+",
+    r"(?i)^я не (можу|зможу)[\s,.:!—–-].*?\n+",
+    r"(?i)^ця новина[\s,.:!—–-].*?\n+",
+    r"(?i)^цей запит[\s,.:!—–-].*?\n+",
+    r"(?i)^і cannot[\s,.:!—–-].*?\n+",
+    r"(?i)^sorry[\s,.:!—–-].*?\n+",
+    r"(?i)^unfortunately[\s,.:!—–-].*?\n+",
+    r"(?i)^натомість[\s,.:!—–-].*?\n+",
+    r"(?i)^замість цього[\s,.:!—–-].*?\n+",
+    r"(?i)^оскільки новина.*?\n+",
+]
+
+
+def _clean_ai_meta(text: str) -> str:
+    """Strip AI apologies, refusals, and meta-commentary from generated posts."""
+    cleaned = text
+    for pattern in _META_PATTERNS:
+        cleaned = re.sub(pattern, "", cleaned)
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else text
 
 
 async def generate_post_text(
@@ -187,6 +219,7 @@ async def generate_post_text(
     )
 
     text = response.choices[0].message.content.strip()
+    text = _clean_ai_meta(text)
     max_len = limits["max_text_length"]
     if len(text) > max_len:
         text = text[: max_len - 3] + "..."
