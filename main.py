@@ -187,8 +187,11 @@ async def trigger_create_posts():
 async def trigger_publish(slot: int):
     """Manually trigger publishing for a time slot."""
     from scheduler.jobs import publish_scheduled_post
-    await publish_scheduled_post(slot)
-    return {"status": "ok", "message": f"Published slot {slot}"}
+    try:
+        await publish_scheduled_post(slot)
+        return {"status": "ok", "message": f"Published slot {slot}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/api/trigger/poll-messages")

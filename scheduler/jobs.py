@@ -43,11 +43,13 @@ def get_platform_instance(platform: Platform):
 
 
 async def ensure_daily_posts_exist() -> None:
-    """Create today's posts if they don't exist yet (called at startup)."""
+    """Create today's posts if insufficient for the schedule (called at startup)."""
     tz = ZoneInfo(settings.timezone)
     now_local = datetime.now(tz)
     today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+    expected = len(settings.post_schedule)
 
     async with async_session() as session:
         result = await session.execute(
@@ -55,11 +57,30 @@ async def ensure_daily_posts_exist() -> None:
         )
         count = result.scalar() or 0
 
-    if count == 0:
-        logger.info("No posts found for today — creating them now at startup")
+    if count < expected:
+        if count > 0:
+            logger.info(
+                "Found %d post(s) for today but need %d — marking old ones and creating fresh set",
+                count, expected,
+            )
+            async with async_session() as session:
+                old_pubs = await session.execute(
+                    select(Publication)
+                    .join(Post)
+                    .where(
+                        Post.created_at >= today_start_utc,
+                        Publication.status == PostStatus.QUEUED,
+                    )
+                )
+                for pub in old_pubs.scalars().all():
+                    pub.status = PostStatus.FAILED
+                    pub.error_message = "Replaced by new schedule"
+                await session.commit()
+
+        logger.info("Creating %d posts for today's schedule", expected)
         await create_daily_posts()
     else:
-        logger.info("Found %d post(s) for today — skipping startup creation", count)
+        logger.info("Found %d post(s) for today (need %d) — OK", count, expected)
 
 
 async def publish_missed_slots() -> None:
@@ -246,8 +267,8 @@ async def create_daily_posts() -> None:
 async def publish_scheduled_post(time_slot: int) -> None:
     """Publish the post for a specific time slot (0-4).
 
-    Picks today's post for the given slot index and publishes to all platforms.
-    Falls back to any queued post if today's slot is unavailable.
+    Only considers today's posts that still have QUEUED publications.
+    Picks the Nth queued post (by creation time) for the given slot index.
     """
     tz = ZoneInfo(settings.timezone)
     now_local = datetime.now(tz)
@@ -255,36 +276,27 @@ async def publish_scheduled_post(time_slot: int) -> None:
     today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
 
     async with async_session() as session:
-        today_posts_result = await session.execute(
+        queued_posts_result = await session.execute(
             select(Post)
-            .where(Post.created_at >= today_start_utc)
+            .join(Publication)
+            .where(
+                Post.created_at >= today_start_utc,
+                Publication.status == PostStatus.QUEUED,
+            )
+            .group_by(Post.id)
             .order_by(Post.created_at)
         )
-        today_posts = today_posts_result.scalars().all()
+        queued_posts = queued_posts_result.scalars().all()
 
-        post = None
-        if time_slot < len(today_posts):
-            candidate = today_posts[time_slot]
-            pubs_check = await session.execute(
-                select(Publication)
-                .where(Publication.post_id == candidate.id, Publication.status == PostStatus.QUEUED)
-            )
-            if pubs_check.scalars().first():
-                post = candidate
-
-        if not post:
-            result = await session.execute(
-                select(Post)
-                .join(Publication)
-                .where(Publication.status == PostStatus.QUEUED, Post.created_at >= today_start_utc)
-                .order_by(Post.created_at)
-                .limit(1)
-            )
-            post = result.scalar_one_or_none()
-
-        if not post:
+        if not queued_posts:
             logger.warning("No queued posts for time slot %d", time_slot)
             return
+
+        post = queued_posts[0]
+        logger.info(
+            "Slot %d: publishing post_id=%d '%s' (%d queued posts remaining)",
+            time_slot, post.id, (post.title or "")[:50], len(queued_posts),
+        )
 
         pubs_result = await session.execute(
             select(Publication)
