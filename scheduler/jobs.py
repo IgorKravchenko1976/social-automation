@@ -151,17 +151,42 @@ async def create_daily_posts() -> None:
 async def publish_scheduled_post(time_slot: int) -> None:
     """Publish the post for a specific time slot (0, 1, or 2).
 
-    Picks the next queued post and publishes to all platforms.
+    Picks today's post for the given slot index and publishes to all platforms.
+    Falls back to any queued post if today's slot is unavailable.
     """
+    tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(tz)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+
     async with async_session() as session:
-        result = await session.execute(
+        today_posts_result = await session.execute(
             select(Post)
-            .join(Publication)
-            .where(Publication.status == PostStatus.QUEUED)
+            .where(Post.created_at >= today_start_utc)
             .order_by(Post.created_at)
-            .limit(1)
         )
-        post = result.scalar_one_or_none()
+        today_posts = today_posts_result.scalars().all()
+
+        post = None
+        if time_slot < len(today_posts):
+            candidate = today_posts[time_slot]
+            pubs_check = await session.execute(
+                select(Publication)
+                .where(Publication.post_id == candidate.id, Publication.status == PostStatus.QUEUED)
+            )
+            if pubs_check.scalars().first():
+                post = candidate
+
+        if not post:
+            result = await session.execute(
+                select(Post)
+                .join(Publication)
+                .where(Publication.status == PostStatus.QUEUED, Post.created_at >= today_start_utc)
+                .order_by(Post.created_at)
+                .limit(1)
+            )
+            post = result.scalar_one_or_none()
+
         if not post:
             logger.warning("No queued posts for time slot %d", time_slot)
             return
@@ -248,6 +273,33 @@ async def _publish_single(
             pub.status = PostStatus.QUEUED
         pub.error_message = str(e)
         logger.exception("Exception publishing to %s", platform.value)
+
+
+async def expire_old_queued_publications() -> None:
+    """Mark queued publications from previous days as failed so they don't block today's posts."""
+    tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(tz)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Publication)
+            .join(Post)
+            .where(
+                Publication.status == PostStatus.QUEUED,
+                Post.created_at < today_start_utc,
+            )
+        )
+        old_pubs = result.scalars().all()
+
+        for pub in old_pubs:
+            pub.status = PostStatus.FAILED
+            pub.error_message = pub.error_message or "Expired: not published on scheduled day"
+
+        await session.commit()
+        if old_pubs:
+            logger.info("Expired %d old queued publications from previous days", len(old_pubs))
 
 
 async def retry_failed_publications() -> None:

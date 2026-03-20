@@ -98,7 +98,9 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     logger.info("Checking if today's posts exist...")
-    from scheduler.jobs import ensure_daily_posts_exist, publish_missed_slots
+    from scheduler.jobs import ensure_daily_posts_exist, publish_missed_slots, expire_old_queued_publications
+
+    await expire_old_queued_publications()
     await ensure_daily_posts_exist()
 
     logger.info("Publishing any missed time slots...")
