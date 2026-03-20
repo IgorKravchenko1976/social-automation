@@ -98,8 +98,11 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     logger.info("Checking if today's posts exist...")
-    from scheduler.jobs import ensure_daily_posts_exist
+    from scheduler.jobs import ensure_daily_posts_exist, publish_missed_slots
     await ensure_daily_posts_exist()
+
+    logger.info("Publishing any missed time slots...")
+    await publish_missed_slots()
 
     logger.info("Starting Telegram bot...")
     from platforms.telegram import start_telegram_bot, stop_telegram_bot

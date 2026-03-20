@@ -215,8 +215,8 @@ def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str) 
         <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Пости</th>
         <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Коментарі</th>
         <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Перегляди</th>
-        <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">👍</th>
-        <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">👎</th>
+        <th style="padding:10px 8px;text-align:center;color:#6ee7b7;font-weight:400;">✅ Позитивні</th>
+        <th style="padding:10px 8px;text-align:center;color:#f87171;font-weight:400;">❌ Негативні</th>
       </tr>
     </thead>
     <tbody>{rows_html}

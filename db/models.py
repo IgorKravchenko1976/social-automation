@@ -86,6 +86,21 @@ class RSSSource(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class ReactionSnapshot(Base):
+    """Latest reaction counts per message+emoji, updated on each Telegram event."""
+    __tablename__ = "reaction_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(20), nullable=False)
+    message_id = Column(String(500), nullable=False)
+    emoji = Column(String(20), nullable=False)
+    category = Column(String(20), nullable=False)   # "positive" or "negative"
+    total_count = Column(Integer, default=0)
+    message_date = Column(String(10), nullable=True)  # YYYY-MM-DD of the message
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class DailyStats(Base):
     __tablename__ = "daily_stats"
 
@@ -96,6 +111,6 @@ class DailyStats(Base):
     posts = Column(Integer, default=0)
     comments = Column(Integer, default=0)
     views = Column(Integer, default=0)
-    likes = Column(Integer, default=0)
-    dislikes = Column(Integer, default=0)
+    likes = Column(Integer, default=0)              # positive + neutral reactions
+    dislikes = Column(Integer, default=0)           # negative reactions
     collected_at = Column(DateTime, server_default=func.now())

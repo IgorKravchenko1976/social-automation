@@ -10,7 +10,7 @@ import httpx
 from config.platforms import Platform
 from config.settings import settings
 from db.database import async_session
-from db.models import DailyStats, Publication, PostStatus, Message, MessageDirection
+from db.models import DailyStats, Publication, PostStatus, Message, MessageDirection, ReactionSnapshot
 
 from sqlalchemy import select, func as sa_func
 
@@ -28,6 +28,26 @@ async def _http_client() -> httpx.AsyncClient:
     if _http is None:
         _http = httpx.AsyncClient(timeout=30)
     return _http
+
+
+async def _collect_reactions(platform: str, date_str: str) -> tuple[int, int]:
+    """Aggregate positive and negative reaction counts for a given date."""
+    async with async_session() as session:
+        positive = await session.execute(
+            select(sa_func.coalesce(sa_func.sum(ReactionSnapshot.total_count), 0)).where(
+                ReactionSnapshot.platform == platform,
+                ReactionSnapshot.category == "positive",
+                ReactionSnapshot.message_date == date_str,
+            )
+        )
+        negative = await session.execute(
+            select(sa_func.coalesce(sa_func.sum(ReactionSnapshot.total_count), 0)).where(
+                ReactionSnapshot.platform == platform,
+                ReactionSnapshot.category == "negative",
+                ReactionSnapshot.message_date == date_str,
+            )
+        )
+        return positive.scalar() or 0, negative.scalar() or 0
 
 
 async def _collect_telegram(date_str: str) -> dict:
@@ -77,6 +97,11 @@ async def _collect_telegram(date_str: str) -> dict:
             )
         )
         stats["comments"] = result.scalar() or 0
+
+    # Emoji reactions (all emojis classified into positive/negative)
+    pos, neg = await _collect_reactions(Platform.TELEGRAM.value, date_str)
+    stats["likes"] = pos
+    stats["dislikes"] = neg
 
     return stats
 

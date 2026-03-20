@@ -226,6 +226,64 @@ async def _process_message(message: dict) -> None:
         )
 
 
+async def _track_reaction_count(update: dict) -> None:
+    """Store or update reaction counts from a message_reaction_count event."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from config.settings import settings as _settings
+    from config.emoji_classification import classify_emoji
+    from db.database import async_session
+    from db.models import ReactionSnapshot
+
+    chat = update.get("chat", {})
+    message_id = str(update.get("message_id", ""))
+    reactions = update.get("reactions", [])
+    event_date = update.get("date", 0)
+
+    tz = ZoneInfo(_settings.timezone)
+    msg_date = datetime.fromtimestamp(event_date, tz=tz).strftime("%Y-%m-%d") if event_date else None
+
+    logger.info("Reaction count update: chat=%s msg=%s reactions=%d",
+                chat.get("title", chat.get("id", "?")), message_id, len(reactions))
+
+    try:
+        async with async_session() as session:
+            from sqlalchemy import select
+            for r in reactions:
+                rtype = r.get("type", {})
+                emoji = rtype.get("emoji", "")
+                if not emoji:
+                    continue
+                total = r.get("total_count", 0)
+                category = classify_emoji(emoji)
+
+                existing = await session.execute(
+                    select(ReactionSnapshot).where(
+                        ReactionSnapshot.platform == "telegram",
+                        ReactionSnapshot.message_id == message_id,
+                        ReactionSnapshot.emoji == emoji,
+                    )
+                )
+                row = existing.scalar_one_or_none()
+                if row:
+                    row.total_count = total
+                    row.category = category
+                    if msg_date:
+                        row.message_date = msg_date
+                else:
+                    session.add(ReactionSnapshot(
+                        platform="telegram",
+                        message_id=message_id,
+                        emoji=emoji,
+                        category=category,
+                        total_count=total,
+                        message_date=msg_date,
+                    ))
+            await session.commit()
+    except Exception:
+        logger.exception("Failed to save reaction counts")
+
+
 async def _polling_loop() -> None:
     """Manual getUpdates polling loop -- simple and reliable."""
     global _http_client
@@ -243,7 +301,13 @@ async def _polling_loop() -> None:
 
     while True:
         try:
-            params = {"timeout": 30, "allowed_updates": ["message", "channel_post"]}
+            params = {
+                "timeout": 30,
+                "allowed_updates": [
+                    "message", "channel_post",
+                    "message_reaction", "message_reaction_count",
+                ],
+            }
             if offset:
                 params["offset"] = offset
             resp = await _http_client.post(_api_url("getUpdates"), json=params, timeout=45)
@@ -271,6 +335,24 @@ async def _polling_loop() -> None:
                 offset = upd["update_id"] + 1
                 logger.info("=== BOT v3 === Update %s: keys=%s", upd["update_id"], list(upd.keys()))
 
+                # Reaction count updates (anonymous reactions in channels)
+                reaction_count = upd.get("message_reaction_count")
+                if reaction_count:
+                    try:
+                        await _track_reaction_count(reaction_count)
+                    except Exception:
+                        logger.exception("=== BOT v3 === Error tracking reaction count %s", upd["update_id"])
+                    continue
+
+                # Individual reaction updates (non-anonymous)
+                reaction = upd.get("message_reaction")
+                if reaction:
+                    try:
+                        await _track_reaction_count_from_individual(reaction)
+                    except Exception:
+                        logger.exception("=== BOT v3 === Error tracking reaction %s", upd["update_id"])
+                    continue
+
                 channel_post = upd.get("channel_post")
                 if channel_post:
                     try:
@@ -292,6 +374,58 @@ async def _polling_loop() -> None:
         except Exception:
             logger.exception("=== BOT v3 === Polling error, retrying in 5s...")
             await asyncio.sleep(5)
+
+
+async def _track_reaction_count_from_individual(update: dict) -> None:
+    """Convert a message_reaction event into reaction snapshot updates."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from config.settings import settings as _settings
+    from config.emoji_classification import classify_emoji
+    from db.database import async_session
+    from db.models import ReactionSnapshot
+    from sqlalchemy import select
+
+    message_id = str(update.get("message_id", ""))
+    new_reactions = update.get("new_reaction", [])
+    event_date = update.get("date", 0)
+
+    tz = ZoneInfo(_settings.timezone)
+    msg_date = datetime.fromtimestamp(event_date, tz=tz).strftime("%Y-%m-%d") if event_date else None
+
+    try:
+        async with async_session() as session:
+            for r in new_reactions:
+                emoji = r.get("emoji", "")
+                if not emoji:
+                    continue
+                category = classify_emoji(emoji)
+
+                existing = await session.execute(
+                    select(ReactionSnapshot).where(
+                        ReactionSnapshot.platform == "telegram",
+                        ReactionSnapshot.message_id == message_id,
+                        ReactionSnapshot.emoji == emoji,
+                    )
+                )
+                row = existing.scalar_one_or_none()
+                if row:
+                    row.total_count += 1
+                    row.category = category
+                    if msg_date:
+                        row.message_date = msg_date
+                else:
+                    session.add(ReactionSnapshot(
+                        platform="telegram",
+                        message_id=message_id,
+                        emoji=emoji,
+                        category=category,
+                        total_count=1,
+                        message_date=msg_date,
+                    ))
+            await session.commit()
+    except Exception:
+        logger.exception("Failed to save individual reaction")
 
 
 async def start_telegram_bot() -> None:

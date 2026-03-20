@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update, func as sa_func
@@ -58,6 +59,38 @@ async def ensure_daily_posts_exist() -> None:
         await create_daily_posts()
     else:
         logger.info("Found %d post(s) for today — skipping startup creation", count)
+
+
+async def publish_missed_slots() -> None:
+    """Publish posts for time slots that were missed (e.g. after a restart).
+
+    Checks each scheduled time: if it has already passed today and there are
+    still queued publications, triggers publishing for that slot.
+    """
+    tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(tz)
+
+    for idx, time_str in enumerate(settings.post_schedule):
+        hour, minute = map(int, time_str.split(":"))
+        slot_time = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        if now_local > slot_time:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(sa_func.count(Publication.id))
+                    .where(Publication.status == PostStatus.QUEUED)
+                )
+                queued = result.scalar() or 0
+
+            if queued > 0:
+                logger.info(
+                    "Missed slot %d (%s) — publishing now (%d queued)",
+                    idx, time_str, queued,
+                )
+                try:
+                    await publish_scheduled_post(idx)
+                except Exception:
+                    logger.exception("Error publishing missed slot %d", idx)
 
 
 _feature_index = 0
