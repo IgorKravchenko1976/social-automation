@@ -11,8 +11,9 @@ TOURISM_RSS_FEEDS = [
     ("Lonely Planet", "https://www.lonelyplanet.com/news/feed"),
     ("Travel Weekly", "https://www.travelweekly.com/rss"),
     ("Skift", "https://feeds.skift.com/skift"),
-    ("BBC Travel", "https://feeds.bbci.co.uk/news/world/rss.xml"),
     ("CNN Travel", "https://rss.cnn.com/rss/edition_travel.rss"),
+    ("Condé Nast Traveler", "https://www.cntraveler.com/feed/rss"),
+    ("Travel + Leisure", "https://www.travelandleisure.com/arcio/rss/"),
 ]
 
 ACTIVE_SPORTS_PLACES = [
