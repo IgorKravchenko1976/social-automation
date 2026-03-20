@@ -25,12 +25,19 @@ async def get_active_token(platform: str) -> str | None:
         )
         row = result.scalar_one_or_none()
         if row and row.token:
-            if row.expires_at is None or row.expires_at > datetime.now(timezone.utc):
+            if row.expires_at is None:
+                return row.token
+            exp = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            if exp > datetime.now(timezone.utc):
                 return row.token
     return None
 
 
 async def _save_token(platform: str, token: str, expires_at: datetime | None) -> None:
+    naive_expires = None
+    if expires_at is not None:
+        naive_expires = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
+
     async with async_session() as session:
         result = await session.execute(
             select(TokenStore).where(TokenStore.platform == platform)
@@ -38,9 +45,9 @@ async def _save_token(platform: str, token: str, expires_at: datetime | None) ->
         row = result.scalar_one_or_none()
         if row:
             row.token = token
-            row.expires_at = expires_at
+            row.expires_at = naive_expires
         else:
-            session.add(TokenStore(platform=platform, token=token, expires_at=expires_at))
+            session.add(TokenStore(platform=platform, token=token, expires_at=naive_expires))
         await session.commit()
 
 
