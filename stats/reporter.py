@@ -17,7 +17,7 @@ from sqlalchemy import select
 from config.platforms import Platform
 from config.settings import settings
 from db.database import async_session
-from db.models import DailyStats
+from db.models import DailyStats, Post, Publication, PostStatus
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,98 @@ def _make_monthly_chart(month_data: dict, metric_keys: list[str], title: str) ->
         return ""
 
 
+POST_TYPE_LABELS = {
+    0: "Туристична новина",
+    1: "Активний спорт",
+    2: "Туристична новина",
+    3: "Функціонал додатку",
+    4: "Красиве місце",
+}
+
+
+async def _build_post_schedule_section() -> str:
+    """Build HTML showing today's post schedule and publication status."""
+    from datetime import timezone
+    tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(tz)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+    schedule = settings.post_schedule
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Post)
+            .where(Post.created_at >= today_start_utc)
+            .order_by(Post.created_at)
+        )
+        today_posts = result.scalars().all()
+
+        rows = ""
+        for idx, time_str in enumerate(schedule):
+            hour, minute = map(int, time_str.split(":"))
+            slot_time = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            is_past = now_local > slot_time
+            type_label = POST_TYPE_LABELS.get(idx, f"Пост #{idx+1}")
+
+            if idx < len(today_posts):
+                post = today_posts[idx]
+                title = (post.title or post.content_raw or "")[:60]
+                if len(post.title or post.content_raw or "") > 60:
+                    title += "..."
+
+                pub_result = await session.execute(
+                    select(Publication).where(Publication.post_id == post.id)
+                )
+                pubs = pub_result.scalars().all()
+
+                published = sum(1 for p in pubs if p.status == PostStatus.PUBLISHED)
+                failed = sum(1 for p in pubs if p.status == PostStatus.FAILED)
+                queued = sum(1 for p in pubs if p.status == PostStatus.QUEUED)
+                total = len(pubs)
+
+                if published == total and total > 0:
+                    status_html = f'<span style="color:#6ee7b7;">✅ {published}/{total}</span>'
+                elif failed > 0:
+                    status_html = f'<span style="color:#f87171;">❌ {failed} помилок</span>'
+                elif queued > 0 and is_past:
+                    status_html = f'<span style="color:#fbbf24;">⏳ пропущено</span>'
+                elif queued > 0:
+                    status_html = f'<span style="color:#94a3b8;">🕐 очікує</span>'
+                else:
+                    status_html = f'<span style="color:#6ee7b7;">✅ {published}/{total}</span>'
+            else:
+                title = "—"
+                status_html = '<span style="color:#f87171;">❌ не створено</span>'
+
+            time_color = "#6ee7b7" if is_past else "#94a3b8"
+            rows += f"""
+            <tr>
+              <td style="padding:8px 14px;border-bottom:1px solid #262640;">
+                <span style="color:{time_color};font-weight:700;">{time_str}</span>
+              </td>
+              <td style="padding:8px 10px;border-bottom:1px solid #262640;color:#94a3b8;">{type_label}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #262640;">{title}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #262640;text-align:center;">{status_html}</td>
+            </tr>"""
+
+    return f"""
+  <h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #22d3ee;padding-bottom:6px;margin-top:32px;">
+    Розклад постів сьогодні
+  </h2>
+  <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;">
+    <thead>
+      <tr style="background:#1a1a2e;">
+        <th style="padding:8px 14px;text-align:left;color:#94a3b8;font-weight:400;">Час</th>
+        <th style="padding:8px 10px;text-align:left;color:#94a3b8;font-weight:400;">Тип</th>
+        <th style="padding:8px 10px;text-align:left;color:#94a3b8;font-weight:400;">Тема</th>
+        <th style="padding:8px 10px;text-align:center;color:#94a3b8;font-weight:400;">Статус</th>
+      </tr>
+    </thead>
+    <tbody>{rows}
+    </tbody>
+  </table>"""
+
+
 def _build_token_section(token_statuses: list) -> str:
     """Build HTML section showing token validity and expiry."""
     rows = ""
@@ -206,7 +298,7 @@ def _build_token_section(token_statuses: list) -> str:
 
 
 def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
-                token_section: str = "") -> str:
+                token_section: str = "", post_schedule_section: str = "") -> str:
     """Build full HTML email body."""
 
     # ── Block 1: Today ──
@@ -317,6 +409,8 @@ def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
     </tbody>
   </table>
 
+  {post_schedule_section}
+
   {token_section}
 
   <p style="color:#64748b;font-size:12px;margin-top:32px;text-align:center;">
@@ -403,12 +497,15 @@ async def send_daily_report() -> None:
     logger.info("=== REPORT === Loading monthly data...")
     month_data = await _load_monthly_totals(months=6)
 
+    logger.info("=== REPORT === Building post schedule...")
+    post_schedule_section = await _build_post_schedule_section()
+
     logger.info("=== REPORT === Checking tokens...")
     token_statuses = await check_all_tokens()
     token_section = _build_token_section(token_statuses)
 
     logger.info("=== REPORT === Building HTML...")
-    html = _build_html(today_stats, month_data, date_str, token_section)
+    html = _build_html(today_stats, month_data, date_str, token_section, post_schedule_section)
 
     logger.info("=== REPORT === Sending via Resend API...")
     await _send_email(f"I'M IN — Звіт за {date_str}", html)
