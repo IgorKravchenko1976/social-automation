@@ -52,7 +52,9 @@ async def _check_telegram() -> TokenStatus:
 
 
 async def _check_facebook() -> TokenStatus:
-    token = settings.facebook_page_access_token
+    from stats.token_renewer import get_active_token
+    db_token = await get_active_token("facebook")
+    token = db_token or settings.facebook_page_access_token
     if not token or token.startswith("your-"):
         return TokenStatus("Facebook", configured=False, valid=False)
     try:

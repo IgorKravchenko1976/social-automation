@@ -16,13 +16,26 @@ GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
 
 class FacebookPlatform(BasePlatform):
     platform = Platform.FACEBOOK
+    _cached_token: str | None = None
+
+    async def _get_token(self) -> str:
+        """Return the best available token: DB (auto-renewed) → env fallback."""
+        from stats.token_renewer import get_active_token
+        db_token = await get_active_token("facebook")
+        if db_token:
+            return db_token
+        return settings.facebook_page_access_token
 
     @property
     def _token(self) -> str:
-        return settings.facebook_page_access_token
+        return self._cached_token or settings.facebook_page_access_token
+
+    async def _ensure_token(self) -> None:
+        self._cached_token = await self._get_token()
 
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
         try:
+            await self._ensure_token()
             async with httpx.AsyncClient(timeout=60) as client:
                 if image_path:
                     return await self._publish_with_image(client, text, image_path)
@@ -61,6 +74,7 @@ class FacebookPlatform(BasePlatform):
 
     async def publish_video(self, text: str, video_path: str) -> PublishResult:
         try:
+            await self._ensure_token()
             async with httpx.AsyncClient(timeout=120) as client:
                 with open(video_path, "rb") as f:
                     resp = await client.post(
@@ -81,6 +95,7 @@ class FacebookPlatform(BasePlatform):
     async def get_new_messages(self) -> list[dict]:
         """Fetch recent comments on page posts."""
         try:
+            await self._ensure_token()
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(
                     f"{GRAPH_API_BASE}/{settings.facebook_page_id}/feed",
@@ -111,6 +126,7 @@ class FacebookPlatform(BasePlatform):
 
     async def send_reply(self, platform_message_id: str, text: str) -> bool:
         try:
+            await self._ensure_token()
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
                     f"{GRAPH_API_BASE}/{platform_message_id}/comments",

@@ -61,6 +61,15 @@ def _setup_scheduler() -> None:
     )
     logger.info("Daily report scheduled at 20:00 %s → %s", tz, settings.report_email_to)
 
+    from stats.token_renewer import renew_all_tokens
+    scheduler.add_job(
+        renew_all_tokens,
+        CronTrigger(hour=3, minute=0, timezone=tz),
+        id="renew_tokens",
+        replace_existing=True,
+    )
+    logger.info("Token renewal check scheduled daily at 03:00 %s", tz)
+
     # Poll messages every 5 minutes
     scheduler.add_job(
         poll_all_messages,
@@ -105,6 +114,10 @@ async def lifespan(app: FastAPI):
 
     logger.info("Publishing any missed time slots...")
     await publish_missed_slots()
+
+    logger.info("Seeding tokens to DB...")
+    from stats.token_renewer import seed_tokens_from_env
+    await seed_tokens_from_env()
 
     logger.info("Starting Telegram bot...")
     from platforms.telegram import start_telegram_bot, stop_telegram_bot
@@ -228,6 +241,18 @@ async def test_facebook_post():
     fb = FacebookPlatform()
     result = await fb.publish_text("👋 Тестовий пост від I'M IN — автоматизація працює! 🚀\n\nСлідкуйте за новинами додатку для мандрівників.\n🌍 im-in.net")
     return {"status": "ok" if result.success else "error", "post_id": result.platform_post_id, "error": result.error}
+
+
+@app.post("/api/trigger/renew-tokens")
+async def trigger_renew_tokens():
+    """Manually trigger token renewal."""
+    try:
+        from stats.token_renewer import renew_all_tokens
+        results = await renew_all_tokens()
+        return {"status": "ok", "results": results}
+    except Exception as e:
+        logger.exception("Token renewal failed")
+        return {"status": "error", "error": str(e)}
 
 
 @app.post("/api/trigger/daily-report")

@@ -101,6 +101,17 @@ class ReactionSnapshot(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class TokenStore(Base):
+    __tablename__ = "token_store"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(20), nullable=False, unique=True)
+    token = Column(Text, nullable=False)
+    expires_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class DailyStats(Base):
     __tablename__ = "daily_stats"
 
