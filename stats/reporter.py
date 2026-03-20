@@ -137,7 +137,76 @@ def _make_monthly_chart(month_data: dict, metric_keys: list[str], title: str) ->
         return ""
 
 
-def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str) -> str:
+def _build_token_section(token_statuses: list) -> str:
+    """Build HTML section showing token validity and expiry."""
+    rows = ""
+    for ts in token_statuses:
+        if not ts.configured:
+            status_html = '<span style="color:#64748b;">не налаштовано</span>'
+            expiry_html = "—"
+        elif not ts.valid:
+            status_html = '<span style="color:#f87171;font-weight:700;">❌ НЕВАЛІДНИЙ</span>'
+            expiry_html = ts.error or "—"
+        else:
+            status_html = '<span style="color:#6ee7b7;">✅ активний</span>'
+            if ts.expires_at:
+                expiry_html = ts.expires_at.strftime("%Y-%m-%d")
+            else:
+                expiry_html = "безстроковий"
+
+        warning = ""
+        if ts.days_remaining is not None and ts.days_remaining <= 5:
+            warning = (
+                '<div style="background:#7f1d1d;color:#fca5a5;padding:8px 12px;'
+                'margin-top:6px;border-radius:4px;font-size:16px;font-weight:700;'
+                'text-transform:uppercase;text-align:center;">'
+                f'⚠️ ТОКЕН {ts.platform.upper()} ЗАКІНЧУЄТЬСЯ ЧЕРЕЗ {ts.days_remaining} ДНІВ — ПРОДОВЖИТИ!'
+                '</div>'
+            )
+
+        days_html = ""
+        if ts.days_remaining is not None:
+            if ts.days_remaining <= 5:
+                days_html = f'<span style="color:#f87171;font-weight:700;">{ts.days_remaining} дн.</span>'
+            elif ts.days_remaining <= 14:
+                days_html = f'<span style="color:#fbbf24;">{ts.days_remaining} дн.</span>'
+            else:
+                days_html = f'<span style="color:#6ee7b7;">{ts.days_remaining} дн.</span>'
+        else:
+            days_html = "—"
+
+        rows += f"""
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #262640;font-weight:600;">{ts.platform}</td>
+          <td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">токен</td>
+          <td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{status_html}</td>
+          <td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{expiry_html}</td>
+          <td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{days_html}</td>
+        </tr>"""
+        if warning:
+            rows += f'<tr><td colspan="5" style="padding:0 14px 10px;">{warning}</td></tr>'
+
+    return f"""
+  <h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #f59e0b;padding-bottom:6px;margin-top:32px;">
+    Стан токенів
+  </h2>
+  <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;">
+    <thead>
+      <tr style="background:#1a1a2e;">
+        <th style="padding:10px 14px;text-align:left;color:#94a3b8;font-weight:400;">Соцмережа</th>
+        <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Тип</th>
+        <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Статус</th>
+        <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Дійсний до</th>
+        <th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Залишилось</th>
+      </tr>
+    </thead>
+    <tbody>{rows}
+    </tbody>
+  </table>"""
+
+
+def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
+                token_section: str = "") -> str:
     """Build full HTML email body."""
 
     # ── Block 1: Today ──
@@ -248,6 +317,8 @@ def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str) 
     </tbody>
   </table>
 
+  {token_section}
+
   <p style="color:#64748b;font-size:12px;margin-top:32px;text-align:center;">
     Автоматичний звіт від I'M IN Social Automation • im-in.net
   </p>
@@ -258,9 +329,62 @@ def _build_html(today_stats: list[DailyStats], month_data: dict, date_str: str) 
     return html
 
 
+async def _send_email(subject: str, html: str) -> None:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {settings.resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": settings.report_email_from,
+                "to": [settings.report_email_to],
+                "subject": subject,
+                "html": html,
+            },
+        )
+        if resp.status_code in (200, 201):
+            logger.info("Email sent: %s (id=%s)", subject, resp.json().get("id"))
+        else:
+            raise RuntimeError(f"Resend API error {resp.status_code}: {resp.text}")
+
+
+def _build_token_urgent_email(expiring: list) -> str:
+    """Build urgent HTML email for tokens about to expire."""
+    rows = ""
+    for ts in expiring:
+        rows += f"""
+        <div style="background:#7f1d1d;color:#fca5a5;padding:16px;margin:12px 0;
+                    border-radius:8px;border:2px solid #f87171;">
+          <div style="font-size:24px;font-weight:700;text-align:center;text-transform:uppercase;">
+            ⚠️ ТОКЕН {ts.platform.upper()} ЗАКІНЧУЄТЬСЯ!
+          </div>
+          <div style="text-align:center;margin-top:8px;font-size:16px;">
+            Залишилось: <strong>{ts.days_remaining} дн.</strong>
+            {(' — до ' + ts.expires_at.strftime('%Y-%m-%d')) if ts.expires_at else ''}
+          </div>
+          <div style="text-align:center;margin-top:12px;font-size:14px;color:#fbbf24;">
+            Перегенеруйте токен через Graph API Explorer → /me/accounts
+          </div>
+        </div>"""
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#0f0f23;color:#e2e8f0;font-family:Arial,Helvetica,sans-serif;">
+<div style="max-width:600px;margin:0 auto;padding:24px;">
+  <h1 style="color:#f87171;font-size:28px;text-align:center;">🚨 УВАГА: ТОКЕНИ ЗАКІНЧУЮТЬСЯ</h1>
+  {rows}
+  <p style="color:#64748b;font-size:12px;margin-top:32px;text-align:center;">
+    I'M IN Social Automation • im-in.net
+  </p>
+</div></body></html>"""
+
+
 async def send_daily_report() -> None:
     """Collect stats, build report, send email via Resend."""
     from stats.collector import collect_all_stats
+    from stats.token_checker import check_all_tokens
 
     if not settings.resend_api_key or not settings.report_email_to:
         logger.warning("Resend not configured (key=%s, to=%r) — skipping",
@@ -279,26 +403,23 @@ async def send_daily_report() -> None:
     logger.info("=== REPORT === Loading monthly data...")
     month_data = await _load_monthly_totals(months=6)
 
+    logger.info("=== REPORT === Checking tokens...")
+    token_statuses = await check_all_tokens()
+    token_section = _build_token_section(token_statuses)
+
     logger.info("=== REPORT === Building HTML...")
-    html = _build_html(today_stats, month_data, date_str)
+    html = _build_html(today_stats, month_data, date_str, token_section)
 
     logger.info("=== REPORT === Sending via Resend API...")
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {settings.resend_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "from": settings.report_email_from,
-                "to": [settings.report_email_to],
-                "subject": f"I'M IN — Звіт за {date_str}",
-                "html": html,
-            },
+    await _send_email(f"I'M IN — Звіт за {date_str}", html)
+
+    expiring = [t for t in token_statuses if t.days_remaining is not None and t.days_remaining <= 5]
+    if expiring:
+        logger.warning("=== REPORT === Tokens expiring soon: %s",
+                        ", ".join(f"{t.platform} ({t.days_remaining}d)" for t in expiring))
+        urgent_html = _build_token_urgent_email(expiring)
+        days_list = ", ".join(f"{t.platform} ({t.days_remaining}д)" for t in expiring)
+        await _send_email(
+            f"🚨 УВАГА: Токени закінчуються! {days_list}",
+            urgent_html,
         )
-        if resp.status_code in (200, 201):
-            logger.info("=== REPORT === Sent to %s (id=%s)",
-                        settings.report_email_to, resp.json().get("id"))
-        else:
-            raise RuntimeError(f"Resend API error {resp.status_code}: {resp.text}")

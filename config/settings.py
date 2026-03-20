@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # Facebook
     facebook_page_id: str = ""
     facebook_page_access_token: str = ""
+    facebook_app_id: str = ""
+    facebook_app_secret: str = ""
 
     # Twitter / X
     twitter_api_key: str = ""
