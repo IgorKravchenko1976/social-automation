@@ -12,7 +12,7 @@ from config.platforms import Platform, PLATFORM_LIMITS
 from config.settings import settings
 from content.generator import generate_post_text
 from content.product_knowledge import FEATURE_TOPICS
-from content.tourism_topics import TOURISM_RSS_FEEDS, ACTIVE_SPORTS_PLACES, LEISURE_TRAVEL_PLACES
+from content.tourism_topics import TOURISM_RSS_FEEDS, ACTIVE_SPORTS_PLACES, LEISURE_TRAVEL_PLACES, BANNED_RSS_KEYWORDS
 from content.media import get_image_for_post, create_slideshow_video
 from content.rss_parser import parse_all_sources, fetch_feed
 from db.database import async_session
@@ -65,33 +65,52 @@ async def ensure_daily_posts_exist() -> None:
 async def publish_missed_slots() -> None:
     """Publish posts for time slots that were missed (e.g. after a restart).
 
-    Checks each scheduled time: if it has already passed today and there are
-    still queued publications, triggers publishing for that slot.
+    For each past time slot today, checks if the corresponding post still has
+    queued publications, and publishes if so.
     """
     tz = ZoneInfo(settings.timezone)
     now_local = datetime.now(tz)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+    async with async_session() as session:
+        today_posts_result = await session.execute(
+            select(Post)
+            .where(Post.created_at >= today_start_utc)
+            .order_by(Post.created_at)
+        )
+        today_posts = today_posts_result.scalars().all()
 
     for idx, time_str in enumerate(settings.post_schedule):
         hour, minute = map(int, time_str.split(":"))
         slot_time = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-        if now_local > slot_time:
-            async with async_session() as session:
-                result = await session.execute(
-                    select(sa_func.count(Publication.id))
-                    .where(Publication.status == PostStatus.QUEUED)
-                )
-                queued = result.scalar() or 0
+        if now_local <= slot_time:
+            continue
 
-            if queued > 0:
-                logger.info(
-                    "Missed slot %d (%s) — publishing now (%d queued)",
-                    idx, time_str, queued,
+        if idx >= len(today_posts):
+            continue
+
+        post = today_posts[idx]
+        async with async_session() as session:
+            result = await session.execute(
+                select(sa_func.count(Publication.id))
+                .where(
+                    Publication.post_id == post.id,
+                    Publication.status == PostStatus.QUEUED,
                 )
-                try:
-                    await publish_scheduled_post(idx)
-                except Exception:
-                    logger.exception("Error publishing missed slot %d", idx)
+            )
+            queued = result.scalar() or 0
+
+        if queued > 0:
+            logger.info(
+                "Missed slot %d (%s) post_id=%d — publishing now (%d queued pubs)",
+                idx, time_str, post.id, queued,
+            )
+            try:
+                await publish_scheduled_post(idx)
+            except Exception:
+                logger.exception("Error publishing missed slot %d", idx)
 
 
 _feature_index = 0
@@ -106,6 +125,12 @@ def _next_from_pool(pool: list[str], index_name: str) -> str:
     topic = pool[idx % len(pool)]
     g[index_name] = idx + 1
     return topic
+
+
+def _is_banned(title: str, summary: str) -> bool:
+    """Check if an RSS entry contains banned political/military keywords."""
+    text = (title + " " + summary).lower()
+    return any(kw in text for kw in BANNED_RSS_KEYWORDS)
 
 
 async def _fetch_tourism_news(session, count: int = 2) -> list[dict]:
@@ -126,12 +151,16 @@ async def _fetch_tourism_news(session, count: int = 2) -> list[dict]:
         try:
             entries = await fetch_feed(url)
             for entry in entries:
-                if entry["link"] and entry["link"] not in existing_urls:
-                    entry["source_name"] = name
-                    all_entries.append(entry)
-                    existing_urls.add(entry["link"])
-                    if len(all_entries) >= count:
-                        break
+                if not entry["link"] or entry["link"] in existing_urls:
+                    continue
+                if _is_banned(entry.get("title", ""), entry.get("summary", "")):
+                    logger.info("RSS filtered (banned keywords): %s", entry.get("title", "")[:80])
+                    continue
+                entry["source_name"] = name
+                all_entries.append(entry)
+                existing_urls.add(entry["link"])
+                if len(all_entries) >= count:
+                    break
         except Exception:
             logger.warning("Failed to fetch RSS feed: %s", name)
 

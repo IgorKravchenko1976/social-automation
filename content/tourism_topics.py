@@ -7,17 +7,25 @@ cycling through all items before repeating.
 
 TOURISM_RSS_FEEDS = [
     # Ukrainian sources first (priority)
-    ("Укрінформ Туризм", "https://www.ukrinform.ua/rss/block-lastnews"),
     ("Visit Ukraine", "https://visitukraine.today/blog/rss"),
-    # International travel sources
+    ("Укрінформ Туризм", "https://www.ukrinform.ua/rss/rubric-tourism"),
+    # International travel-only sources
     ("The Guardian Travel", "https://www.theguardian.com/travel/rss"),
     ("Euronews Travel", "https://www.euronews.com/travel/travel-news/rss"),
     ("Lonely Planet", "https://www.lonelyplanet.com/news/feed"),
-    ("Travel Weekly", "https://www.travelweekly.com/rss"),
-    ("Skift", "https://feeds.skift.com/skift"),
-    ("CNN Travel", "https://rss.cnn.com/rss/edition_travel.rss"),
     ("Condé Nast Traveler", "https://www.cntraveler.com/feed/rss"),
     ("Travel + Leisure", "https://www.travelandleisure.com/arcio/rss/"),
+    ("CNN Travel", "https://rss.cnn.com/rss/edition_travel.rss"),
+]
+
+BANNED_RSS_KEYWORDS = [
+    "russia", "росія", "російськ", "москв", "putin", "путін",
+    "trump", "трамп", "iran", "іран", "war", "війн", "military",
+    "missile", "ракет", "sanction", "санкці", "nato", "нато",
+    "nuclear", "ядер", "bomb", "election", "вибор", "congress",
+    "конгрес", "senate", "сенат", "pentagon", "пентагон",
+    "weapon", "зброя", "invasion", "вторгн", "kremlin", "кремл",
+    "pearl harbor", "attack on iran",
 ]
 
 ACTIVE_SPORTS_PLACES = [

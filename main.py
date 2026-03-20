@@ -97,6 +97,17 @@ def _setup_scheduler() -> None:
         replace_existing=True,
     )
 
+    # Catch-up: check for missed slots every 15 minutes
+    from scheduler.jobs import publish_missed_slots
+    scheduler.add_job(
+        publish_missed_slots,
+        "interval",
+        minutes=15,
+        id="catchup_missed_slots",
+        replace_existing=True,
+    )
+    logger.info("Catch-up job: checking missed slots every 15 min")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
