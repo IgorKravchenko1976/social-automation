@@ -23,7 +23,8 @@
     "#imin-chat-header .close{background:none;border:none;color:rgba(255,255,255,.8);font-size:22px;cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;transition:background .2s}",
     "#imin-chat-header .close:hover{background:rgba(255,255,255,.15)}",
 
-    "#imin-chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;-webkit-overflow-scrolling:touch}",
+    "#imin-chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;justify-content:flex-end;-webkit-overflow-scrolling:touch}",
+    "#imin-chat-messages.has-scroll{justify-content:flex-start}",
     "#imin-chat-messages::-webkit-scrollbar{width:4px}",
     "#imin-chat-messages::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:4px}",
 
@@ -46,7 +47,7 @@
     "  #imin-chat-fab{bottom:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px))}",
     "  #imin-chat-fab button,#imin-chat-fab a{width:50px;height:50px}",
     "  #imin-chat-fab svg{width:24px;height:24px}",
-    "  #imin-chat-window{position:fixed;top:0;left:0;right:0;bottom:0;width:100%;max-width:100%;height:100%;max-height:100%;border-radius:0;box-shadow:none}",
+    "  #imin-chat-window{position:fixed;top:0;left:0;right:0;width:100%;max-width:100%;height:100dvh;height:100vh;max-height:none;border-radius:0;box-shadow:none;bottom:auto}",
     "  #imin-chat-window.open ~ #imin-chat-fab{display:none}",
     "  #imin-chat-header{padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top,0px))}",
     "  #imin-chat-header .close{width:40px;height:40px;font-size:26px}",
@@ -106,11 +107,20 @@
   chatBtn.addEventListener("click", toggle);
   closeBtn.addEventListener("click", toggle);
 
+  function updateScrollClass() {
+    if (messagesDiv.scrollHeight > messagesDiv.clientHeight) {
+      messagesDiv.classList.add("has-scroll");
+    } else {
+      messagesDiv.classList.remove("has-scroll");
+    }
+  }
+
   function addMessage(text, cls) {
     var el = document.createElement("div");
     el.className = "imin-msg " + cls;
     el.textContent = text;
     messagesDiv.appendChild(el);
+    updateScrollClass();
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
     return el;
   }
@@ -153,5 +163,38 @@
   sendBtn.addEventListener("click", sendMessage);
   inputField.addEventListener("keydown", function (e) {
     if (e.key === "Enter") sendMessage();
+  });
+
+  /* ── Mobile keyboard handling via visualViewport ── */
+  function handleViewportResize() {
+    if (!isMobile() || !isOpen) return;
+    var vv = window.visualViewport;
+    if (!vv) return;
+    var h = vv.height;
+    var offsetTop = vv.offsetTop;
+    win.style.height = h + "px";
+    win.style.top = offsetTop + "px";
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", handleViewportResize);
+    window.visualViewport.addEventListener("scroll", handleViewportResize);
+  }
+
+  inputField.addEventListener("focus", function () {
+    if (!isMobile()) return;
+    setTimeout(function () {
+      handleViewportResize();
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }, 300);
+  });
+
+  inputField.addEventListener("blur", function () {
+    if (!isMobile()) return;
+    setTimeout(function () {
+      win.style.height = "";
+      win.style.top = "";
+    }, 100);
   });
 })();
