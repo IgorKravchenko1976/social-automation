@@ -87,6 +87,10 @@ async def _check_facebook() -> TokenStatus:
 async def _check_instagram() -> TokenStatus:
     from datetime import timedelta
     from stats.token_renewer import get_active_token
+    from db.database import async_session
+    from db.models import TokenStore
+    from sqlalchemy import select
+
     db_token = await get_active_token("instagram")
     token = db_token or settings.instagram_access_token
     if not token or not settings.instagram_user_id:
@@ -102,7 +106,20 @@ async def _check_instagram() -> TokenStatus:
                 return TokenStatus("Instagram", configured=True, valid=False,
                                    error=data["error"].get("message", "invalid"))
 
-            return TokenStatus("Instagram", configured=True, valid=True)
+        expires_at = None
+        days_remaining = None
+        async with async_session() as session:
+            result = await session.execute(
+                select(TokenStore).where(TokenStore.platform == "instagram")
+            )
+            row = result.scalar_one_or_none()
+            if row and row.expires_at:
+                exp = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+                expires_at = exp
+                days_remaining = (exp - datetime.now(timezone.utc)).days
+
+        return TokenStatus("Instagram", configured=True, valid=True,
+                           expires_at=expires_at, days_remaining=days_remaining)
     except Exception as e:
         return TokenStatus("Instagram", configured=True, valid=False, error=str(e))
 
