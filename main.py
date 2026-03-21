@@ -257,6 +257,26 @@ async def test_facebook_post():
     return {"status": "ok" if result.success else "error", "post_id": result.platform_post_id, "error": result.error}
 
 
+@app.get("/api/test/instagram-business-id")
+async def get_instagram_business_id():
+    """Look up the Instagram Business Account ID linked to the Facebook Page."""
+    import httpx
+    from stats.token_renewer import get_active_token
+    token = await get_active_token("facebook") or settings.facebook_page_access_token
+    page_id = settings.facebook_page_id
+    if not token or not page_id:
+        return {"status": "error", "error": "Facebook not configured"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"https://graph.facebook.com/v21.0/{page_id}",
+                params={"fields": "instagram_business_account,name", "access_token": token},
+            )
+            return r.json()
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @app.get("/api/test/instagram")
 async def test_instagram():
     """Test Instagram connection and token validity."""
