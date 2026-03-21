@@ -257,6 +257,39 @@ async def test_facebook_post():
     return {"status": "ok" if result.success else "error", "post_id": result.platform_post_id, "error": result.error}
 
 
+@app.get("/api/test/instagram")
+async def test_instagram():
+    """Test Instagram connection and token validity."""
+    import httpx
+    try:
+        token = settings.instagram_access_token
+        user_id = settings.instagram_user_id
+        if not token:
+            return {"status": "error", "error": "INSTAGRAM_ACCESS_TOKEN not configured"}
+        if not user_id:
+            return {"status": "error", "error": "INSTAGRAM_USER_ID not configured"}
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"https://graph.instagram.com/v21.0/{user_id}",
+                params={"fields": "id,username,followers_count,media_count", "access_token": token},
+            )
+            data = r.json()
+
+        if "error" in data:
+            return {"status": "error", "error": data["error"].get("message")}
+
+        return {
+            "status": "ok",
+            "user_id": user_id,
+            "username": data.get("username"),
+            "followers": data.get("followers_count"),
+            "media_count": data.get("media_count"),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @app.post("/api/trigger/renew-tokens")
 async def trigger_renew_tokens():
     """Manually trigger token renewal."""

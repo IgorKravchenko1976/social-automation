@@ -28,8 +28,8 @@ async def check_all_tokens() -> list[TokenStatus]:
 
     results.append(await _check_telegram())
     results.append(await _check_facebook())
+    results.append(await _check_instagram())
     results.append(_check_simple("X / Twitter", settings.twitter_bearer_token))
-    results.append(_check_simple("Instagram", settings.instagram_username))
     results.append(_check_simple("TikTok", settings.tiktok_access_token))
 
     return results
@@ -82,6 +82,29 @@ async def _check_facebook() -> TokenStatus:
             )
     except Exception as e:
         return TokenStatus("Facebook", configured=True, valid=False, error=str(e))
+
+
+async def _check_instagram() -> TokenStatus:
+    from datetime import timedelta
+    from stats.token_renewer import get_active_token
+    db_token = await get_active_token("instagram")
+    token = db_token or settings.instagram_access_token
+    if not token or not settings.instagram_user_id:
+        return TokenStatus("Instagram", configured=False, valid=False)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"https://graph.instagram.com/v21.0/{settings.instagram_user_id}",
+                params={"access_token": token, "fields": "id,username"},
+            )
+            data = r.json()
+            if "error" in data:
+                return TokenStatus("Instagram", configured=True, valid=False,
+                                   error=data["error"].get("message", "invalid"))
+
+            return TokenStatus("Instagram", configured=True, valid=True)
+    except Exception as e:
+        return TokenStatus("Instagram", configured=True, valid=False, error=str(e))
 
 
 def _check_simple(name: str, credential: str) -> TokenStatus:

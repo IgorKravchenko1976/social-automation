@@ -151,6 +151,51 @@ async def _collect_facebook(date_str: str) -> dict:
     return stats
 
 
+async def _collect_instagram(date_str: str) -> dict:
+    """Fetch Instagram stats via Graph API + DB."""
+    stats = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
+
+    if not settings.instagram_user_id or not settings.instagram_access_token:
+        return stats
+
+    from stats.token_renewer import get_active_token
+    token = await get_active_token("instagram") or settings.instagram_access_token
+
+    client = await _http_client()
+
+    try:
+        resp = await client.get(
+            f"https://graph.instagram.com/v21.0/{settings.instagram_user_id}",
+            params={
+                "fields": "followers_count,media_count",
+                "access_token": token,
+            },
+        )
+        data = resp.json()
+        if "error" not in data:
+            stats["subscribers"] = data.get("followers_count", 0)
+        else:
+            logger.warning("Instagram API error (subscribers): %s", data["error"].get("message"))
+    except Exception:
+        logger.exception("Failed to get Instagram subscriber count")
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(sa_func.count(Publication.id)).where(
+                Publication.platform == Platform.INSTAGRAM.value,
+                Publication.status == PostStatus.PUBLISHED,
+                sa_func.date(Publication.published_at) == date_str,
+            )
+        )
+        stats["posts"] = result.scalar() or 0
+
+    pos, neg = await _collect_reactions(Platform.INSTAGRAM.value, date_str)
+    stats["likes"] = pos
+    stats["dislikes"] = neg
+
+    return stats
+
+
 async def _collect_placeholder(platform: Platform, date_str: str) -> dict:
     """Placeholder for platforms without API credentials yet."""
     stats = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
@@ -171,6 +216,7 @@ async def _collect_placeholder(platform: Platform, date_str: str) -> dict:
 _COLLECTORS = {
     Platform.TELEGRAM: _collect_telegram,
     Platform.FACEBOOK: _collect_facebook,
+    Platform.INSTAGRAM: _collect_instagram,
 }
 
 

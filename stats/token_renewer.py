@@ -144,6 +144,57 @@ async def _renew_facebook() -> bool:
         return False
 
 
+async def _renew_instagram() -> bool:
+    """Refresh the Instagram long-lived token (valid for 60 days, refreshable).
+
+    Instagram API tokens can be refreshed via:
+    GET https://graph.instagram.com/refresh_access_token
+        ?grant_type=ig_refresh_token&access_token={token}
+    """
+    current_token = await get_active_token("instagram")
+    if not current_token:
+        current_token = settings.instagram_access_token
+    if not current_token:
+        logger.warning("No Instagram token to renew")
+        return False
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                "https://graph.instagram.com/refresh_access_token",
+                params={
+                    "grant_type": "ig_refresh_token",
+                    "access_token": current_token,
+                },
+            )
+            data = resp.json()
+
+            if "error" in data:
+                err = data["error"].get("message", str(data["error"]))
+                logger.error("Instagram token refresh failed: %s", err)
+                return False
+
+            new_token = data.get("access_token")
+            expires_in = data.get("expires_in", 0)
+
+            if not new_token:
+                logger.error("No access_token in Instagram refresh response")
+                return False
+
+            new_expires_at = None
+            if expires_in:
+                new_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+            await _save_token("instagram", new_token, new_expires_at)
+            days_valid = expires_in // 86400 if expires_in else "unknown"
+            logger.info("Instagram token refreshed! Valid for %s days", days_valid)
+            return True
+
+    except Exception:
+        logger.exception("Instagram token renewal failed")
+        return False
+
+
 async def renew_all_tokens() -> dict[str, bool]:
     """Attempt to renew all platform tokens. Returns {platform: success}."""
     results: dict[str, bool] = {}
@@ -153,32 +204,42 @@ async def renew_all_tokens() -> dict[str, bool]:
     if token or db_token:
         results["facebook"] = await _renew_facebook()
 
+    ig_token = settings.instagram_access_token
+    ig_db = await get_active_token("instagram")
+    if ig_token or ig_db:
+        results["instagram"] = await _renew_instagram()
+
     return results
 
 
 async def seed_tokens_from_env() -> None:
     """On first startup, save env tokens to DB so renewal can work."""
-    token = settings.facebook_page_access_token
-    if not token or token.startswith("your-"):
-        return
+    # Facebook
+    fb_token = settings.facebook_page_access_token
+    if fb_token and not fb_token.startswith("your-"):
+        existing = await get_active_token("facebook")
+        if not existing:
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    r = await client.get(
+                        f"{GRAPH_API}/debug_token",
+                        params={"input_token": fb_token, "access_token": fb_token},
+                    )
+                    data = r.json().get("data", {})
+                    expires_ts = data.get("expires_at", 0)
+                    expires_at = None
+                    if expires_ts and expires_ts > 0:
+                        expires_at = datetime.fromtimestamp(expires_ts, tz=timezone.utc)
+                await _save_token("facebook", fb_token, expires_at)
+                logger.info("Seeded Facebook token to DB (expires: %s)", expires_at)
+            except Exception:
+                logger.exception("Failed to seed Facebook token")
 
-    existing = await get_active_token("facebook")
-    if existing:
-        return
-
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"{GRAPH_API}/debug_token",
-                params={"input_token": token, "access_token": token},
-            )
-            data = r.json().get("data", {})
-            expires_ts = data.get("expires_at", 0)
-            expires_at = None
-            if expires_ts and expires_ts > 0:
-                expires_at = datetime.fromtimestamp(expires_ts, tz=timezone.utc)
-
-        await _save_token("facebook", token, expires_at)
-        logger.info("Seeded Facebook token to DB (expires: %s)", expires_at)
-    except Exception:
-        logger.exception("Failed to seed Facebook token")
+    # Instagram
+    ig_token = settings.instagram_access_token
+    if ig_token:
+        existing = await get_active_token("instagram")
+        if not existing:
+            expires_at = datetime.now(timezone.utc) + timedelta(days=60)
+            await _save_token("instagram", ig_token, expires_at)
+            logger.info("Seeded Instagram token to DB (expires: %s)", expires_at)

@@ -30,9 +30,9 @@ class Settings(BaseSettings):
     twitter_access_token_secret: str = ""
     twitter_bearer_token: str = ""
 
-    # Instagram
-    instagram_username: str = ""
-    instagram_password: str = ""
+    # Instagram (Graph API)
+    instagram_user_id: str = ""
+    instagram_access_token: str = ""
 
     # TikTok
     tiktok_client_key: str = ""
