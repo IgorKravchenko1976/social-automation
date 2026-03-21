@@ -16,7 +16,7 @@ from content.tourism_topics import TOURISM_RSS_FEEDS, ACTIVE_SPORTS_PLACES, LEIS
 from content.media import get_image_for_post, create_slideshow_video
 from content.rss_parser import parse_all_sources, fetch_feed
 from db.database import async_session
-from db.models import Post, Publication, PostStatus
+from db.models import Post, Publication, PostStatus, KVStore
 
 logger = logging.getLogger(__name__)
 
@@ -134,17 +134,25 @@ async def publish_missed_slots() -> None:
                 logger.exception("Error publishing missed slot %d", idx)
 
 
-_feature_index = 0
-_active_index = 0
-_leisure_index = 0
+async def _next_from_pool(pool: list[str], index_key: str) -> str:
+    """Pick the next item from a topic pool, cycling forever. Index persisted in DB."""
+    from db.models import KVStore
 
+    async with async_session() as session:
+        result = await session.execute(
+            select(KVStore).where(KVStore.key == index_key)
+        )
+        row = result.scalar_one_or_none()
+        idx = int(row.value) if row else 0
+        topic = pool[idx % len(pool)]
+        new_idx = idx + 1
 
-def _next_from_pool(pool: list[str], index_name: str) -> str:
-    """Pick the next item from a topic pool, cycling forever."""
-    g = globals()
-    idx = g.get(index_name, 0)
-    topic = pool[idx % len(pool)]
-    g[index_name] = idx + 1
+        if row:
+            row.value = str(new_idx)
+        else:
+            session.add(KVStore(key=index_key, value=str(new_idx)))
+        await session.commit()
+
     return topic
 
 
@@ -221,7 +229,8 @@ async def create_daily_posts() -> None:
             created_posts.append((post, "tourism_news"))
 
         while len([p for p in created_posts if p[1] == "tourism_news"]) < 2:
-            topic = f"Актуальна туристична новина: цікавий тренд або подія у світі подорожей (#{_active_index + _leisure_index})"
+            import random
+            topic = f"Актуальна туристична новина: цікавий тренд або подія у світі подорожей (#{random.randint(1000, 9999)})"
             post = Post(title=topic[:200], content_raw=topic, source="ai")
             session.add(post)
             await session.flush()
@@ -230,7 +239,7 @@ async def create_daily_posts() -> None:
             created_posts.append((post, "tourism_news"))
 
         # --- 1 Active sports/recreation place ---
-        active_topic = _next_from_pool(ACTIVE_SPORTS_PLACES, "_active_index")
+        active_topic = await _next_from_pool(ACTIVE_SPORTS_PLACES, "pool_active")
         post = Post(title=active_topic[:200], content_raw=active_topic, source="ai")
         session.add(post)
         await session.flush()
@@ -239,7 +248,7 @@ async def create_daily_posts() -> None:
         created_posts.append((post, "active_travel"))
 
         # --- 1 App feature ---
-        feature_topic = _next_from_pool(FEATURE_TOPICS, "_feature_index")
+        feature_topic = await _next_from_pool(FEATURE_TOPICS, "pool_feature")
         post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
         session.add(post)
         await session.flush()
@@ -248,7 +257,7 @@ async def create_daily_posts() -> None:
         created_posts.append((post, "feature"))
 
         # --- 1 Leisure travel place ---
-        leisure_topic = _next_from_pool(LEISURE_TRAVEL_PLACES, "_leisure_index")
+        leisure_topic = await _next_from_pool(LEISURE_TRAVEL_PLACES, "pool_leisure")
         post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
         session.add(post)
         await session.flush()

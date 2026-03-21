@@ -112,6 +112,14 @@ class TokenStore(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class KVStore(Base):
+    """Simple key-value store for persistent counters (pool indices, etc.)."""
+    __tablename__ = "kv_store"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(String(500), nullable=False, default="0")
+
+
 class DailyStats(Base):
     __tablename__ = "daily_stats"
 
