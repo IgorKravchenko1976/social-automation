@@ -185,21 +185,26 @@ async def _build_post_schedule_section() -> str:
                 all_pubs = pub_result.scalars().all()
                 pubs = [p for p in all_pubs if p.platform in active_platforms]
 
-                published = sum(1 for p in pubs if p.status == PostStatus.PUBLISHED)
-                failed = sum(1 for p in pubs if p.status == PostStatus.FAILED)
-                queued = sum(1 for p in pubs if p.status == PostStatus.QUEUED)
-                total = len(pubs)
+                platform_icons = {
+                    "telegram": "TG", "facebook": "FB", "instagram": "IG",
+                    "twitter": "X", "tiktok": "TT",
+                }
+                parts = []
+                for pub in sorted(pubs, key=lambda p: p.platform):
+                    icon = platform_icons.get(pub.platform, pub.platform[:2].upper())
+                    if pub.status == PostStatus.PUBLISHED:
+                        parts.append(f'<span style="color:#6ee7b7;" title="{pub.platform}">✅{icon}</span>')
+                    elif pub.status == PostStatus.FAILED:
+                        err = (pub.error_message or "")[:40]
+                        parts.append(f'<span style="color:#f87171;" title="{err}">❌{icon}</span>')
+                    elif pub.status == PostStatus.QUEUED and is_past:
+                        parts.append(f'<span style="color:#fbbf24;" title="{pub.platform}">⏳{icon}</span>')
+                    elif pub.status == PostStatus.QUEUED:
+                        parts.append(f'<span style="color:#94a3b8;" title="{pub.platform}">🕐{icon}</span>')
+                    else:
+                        parts.append(f'<span style="color:#94a3b8;">{icon}</span>')
 
-                if published == total and total > 0:
-                    status_html = f'<span style="color:#6ee7b7;">✅ {published}/{total}</span>'
-                elif failed > 0:
-                    status_html = f'<span style="color:#f87171;">❌ {failed} помилок</span>'
-                elif queued > 0 and is_past:
-                    status_html = f'<span style="color:#fbbf24;">⏳ пропущено</span>'
-                elif queued > 0:
-                    status_html = f'<span style="color:#94a3b8;">🕐 очікує</span>'
-                else:
-                    status_html = f'<span style="color:#6ee7b7;">✅ {published}/{total}</span>'
+                status_html = " ".join(parts) if parts else '<span style="color:#94a3b8;">—</span>'
             else:
                 title = "—"
                 status_html = '<span style="color:#f87171;">❌ не створено</span>'
