@@ -80,13 +80,13 @@ async def generate_image_dalle(prompt: str) -> Optional[str]:
         return None
 
 
-async def get_image_for_post(query: str, use_dalle: bool = False) -> Optional[str]:
-    """Get an image for a post: try Pexels first, fallback to DALL-E if enabled."""
+async def get_image_for_post(query: str, use_dalle: bool = True) -> Optional[str]:
+    """Get an image for a post: try Pexels first, fallback to DALL-E."""
     path = await download_image_pexels(query)
     if path:
         return path
 
-    if use_dalle:
+    if use_dalle and settings.openai_api_key:
         from content.generator import generate_image_prompt
         prompt = await generate_image_prompt(query)
         return await generate_image_dalle(prompt)

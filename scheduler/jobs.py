@@ -20,7 +20,23 @@ from db.models import Post, Publication, PostStatus, KVStore
 
 logger = logging.getLogger(__name__)
 
-ALL_PLATFORMS = list(Platform)
+def _configured_platforms() -> list[Platform]:
+    """Return only platforms that have credentials configured."""
+    configured = []
+    if settings.telegram_bot_token and settings.telegram_channel_id:
+        configured.append(Platform.TELEGRAM)
+    if settings.facebook_page_id and settings.facebook_page_access_token:
+        configured.append(Platform.FACEBOOK)
+    if settings.instagram_user_id and settings.instagram_access_token:
+        configured.append(Platform.INSTAGRAM)
+    if settings.twitter_bearer_token and settings.twitter_api_key:
+        configured.append(Platform.TWITTER)
+    if settings.tiktok_access_token:
+        configured.append(Platform.TIKTOK)
+    return configured
+
+
+ALL_PLATFORMS = _configured_platforms()
 
 MAX_RETRIES = 3
 

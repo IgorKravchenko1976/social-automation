@@ -176,10 +176,14 @@ async def _build_post_schedule_section() -> str:
                 if len(post.title or post.content_raw or "") > 60:
                     title += "..."
 
+                from scheduler.jobs import _configured_platforms
+                active_platforms = {p.value for p in _configured_platforms()}
+
                 pub_result = await session.execute(
                     select(Publication).where(Publication.post_id == post.id)
                 )
-                pubs = pub_result.scalars().all()
+                all_pubs = pub_result.scalars().all()
+                pubs = [p for p in all_pubs if p.platform in active_platforms]
 
                 published = sum(1 for p in pubs if p.status == PostStatus.PUBLISHED)
                 failed = sum(1 for p in pubs if p.status == PostStatus.FAILED)
