@@ -200,13 +200,13 @@ async def debug_publications():
     from db.database import async_session
     from db.models import Post, Publication
     from sqlalchemy import select
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone as tz_mod
     from zoneinfo import ZoneInfo
 
     tz = ZoneInfo(settings.timezone)
     now_local = datetime.now(tz)
     today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start_utc = today_start.astimezone(timezone).replace(tzinfo=None)
+    today_start_utc = today_start.astimezone(tz_mod.utc).replace(tzinfo=None)
 
     async with async_session() as session:
         result = await session.execute(
