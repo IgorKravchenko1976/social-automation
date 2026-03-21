@@ -194,6 +194,44 @@ async def trigger_publish(slot: int):
         return {"status": "error", "message": str(e)}
 
 
+@app.get("/api/debug/publications")
+async def debug_publications():
+    """Show today's publications status for debugging."""
+    from db.database import async_session
+    from db.models import Post, Publication
+    from sqlalchemy import select
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(tz)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start.astimezone(timezone).replace(tzinfo=None)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Post).where(Post.created_at >= today_start_utc).order_by(Post.created_at)
+        )
+        posts = result.scalars().all()
+
+        data = []
+        for p in posts:
+            pub_result = await session.execute(
+                select(Publication).where(Publication.post_id == p.id)
+            )
+            pubs = pub_result.scalars().all()
+            data.append({
+                "post_id": p.id,
+                "title": (p.title or "")[:60],
+                "created": str(p.created_at),
+                "publications": [
+                    {"platform": pub.platform, "status": pub.status, "error": pub.error_message, "retries": pub.retry_count}
+                    for pub in pubs
+                ],
+            })
+    return data
+
+
 @app.post("/api/trigger/poll-messages")
 async def trigger_poll():
     """Manually trigger message polling."""
