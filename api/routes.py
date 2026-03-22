@@ -247,27 +247,39 @@ async def public_fix_geo():
 
 
 @public_router.get("/debug/regenerate-content")
-async def public_regenerate_content():
-    """Re-generate full text for posts that only have short topic in content_raw."""
+async def public_regenerate_content(limit: int = 3, offset: int = 0):
+    """Re-generate full text for posts with short content_raw. Process in small batches."""
     from db.database import async_session as _async_session
-    from db.models import Post, Publication, PostStatus
+    from db.models import Post
     from content.generator import generate_post_text, translate_post
     from config.platforms import Platform
-    from sqlalchemy import select
+    from sqlalchemy import select, func
     import json as _json
 
     updated = []
+    skipped = 0
     async with _async_session() as session:
+        total_q = await session.execute(
+            select(func.count(Post.id)).where(Post.title.isnot(None))
+        )
+        total = total_q.scalar() or 0
+
         result = await session.execute(
-            select(Post).where(Post.title.isnot(None)).order_by(Post.id.desc())
+            select(Post).where(Post.title.isnot(None))
+            .order_by(Post.id.desc()).offset(offset).limit(limit + 10)
         )
         posts = result.scalars().all()
 
+        processed = 0
         for post in posts:
+            if processed >= limit:
+                break
             raw = post.content_raw or ""
             if len(raw) > 500:
+                skipped += 1
                 continue
 
+            processed += 1
             try:
                 if post.source == "rss":
                     full_text = await generate_post_text(
@@ -286,12 +298,21 @@ async def public_regenerate_content():
                     if tr:
                         post.translations = _json.dumps(tr, ensure_ascii=False)
                     updated.append({"id": post.id, "title": (post.title or "")[:60], "len": len(full_text)})
+                else:
+                    updated.append({"id": post.id, "title": (post.title or "")[:60], "note": "no improvement"})
             except Exception as e:
                 updated.append({"id": post.id, "title": (post.title or "")[:60], "error": str(e)})
 
         await session.commit()
 
-    return {"checked": len(posts), "updated": len([u for u in updated if "len" in u]), "details": updated}
+    next_offset = offset + limit + skipped
+    return {
+        "total_posts": total,
+        "processed": len(updated),
+        "skipped_already_long": skipped,
+        "next_call": f"/api/debug/regenerate-content?limit={limit}&offset={next_offset}" if next_offset < total else None,
+        "details": updated,
+    }
 
 
 @public_router.get("/debug/fb-poll-test")
