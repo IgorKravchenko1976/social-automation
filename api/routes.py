@@ -196,6 +196,70 @@ async def public_comment_check():
     return report
 
 
+@public_router.get("/debug/fb-poll-test")
+async def public_fb_poll_test():
+    """Temporary: directly poll Facebook comments and show what the API returns + DB status."""
+    import httpx
+    from db.database import async_session as _async_session
+    from db.models import Message
+    from sqlalchemy import select
+    from stats.token_renewer import get_active_token
+    from config.platforms import FACEBOOK_GRAPH_API
+
+    fb_token = await get_active_token("facebook") or settings.facebook_page_access_token
+    page_id = settings.facebook_page_id
+
+    report = {"raw_comments": [], "db_status": [], "errors": []}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{page_id}/feed",
+                params={
+                    "access_token": fb_token,
+                    "fields": "id,message,comments{id,from,message,created_time}",
+                    "limit": 5,
+                },
+            )
+            data = resp.json()
+            if "error" in data:
+                report["errors"].append(data["error"])
+                return report
+
+            for post in data.get("data", []):
+                post_id = post.get("id")
+                post_text = (post.get("message") or "")[:60]
+                for comment in post.get("comments", {}).get("data", []):
+                    cid = comment.get("id", "")
+                    from_data = comment.get("from")
+                    report["raw_comments"].append({
+                        "post_id": post_id,
+                        "post_text": post_text,
+                        "comment_id": cid,
+                        "from_raw": from_data,
+                        "from_id": from_data.get("id", "") if isinstance(from_data, dict) else None,
+                        "from_name": from_data.get("name", "") if isinstance(from_data, dict) else None,
+                        "message": comment.get("message", ""),
+                        "created_time": comment.get("created_time", ""),
+                    })
+    except Exception as e:
+        report["errors"].append(str(e))
+
+    async with _async_session() as session:
+        for c in report["raw_comments"]:
+            result = await session.execute(
+                select(Message).where(
+                    Message.platform == "facebook",
+                    Message.platform_message_id == c["comment_id"],
+                ).limit(1)
+            )
+            msg = result.scalar_one_or_none()
+            c["in_db"] = msg is not None
+            c["db_replied"] = msg.replied if msg else None
+
+    return report
+
+
 @public_router.get("/debug/test-ig-reply")
 async def public_test_ig_reply():
     """Temporary: try replying to the newest unreplied Instagram comment and return raw API response."""
