@@ -73,6 +73,7 @@ class Message(Base):
     sender_name = Column(String(500), nullable=True)
     direction = Column(Enum(MessageDirection), nullable=False)
     text = Column(Text, nullable=True)
+    thread_id = Column(String(500), nullable=True)
     category = Column(String(50), nullable=True)  # faq, support, spam, human_needed
     replied = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())

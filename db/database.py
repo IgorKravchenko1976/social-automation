@@ -29,18 +29,20 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await _migrate_add_geo_columns(conn)
+        await _run_migrations(conn)
 
 
-async def _migrate_add_geo_columns(conn) -> None:
-    """Add latitude/longitude/place_name columns to posts table if missing."""
-    for col, col_type in [
-        ("latitude", "FLOAT"),
-        ("longitude", "FLOAT"),
-        ("place_name", "VARCHAR(500)"),
-    ]:
+async def _run_migrations(conn) -> None:
+    """Add columns that may be missing from existing tables."""
+    _alters = [
+        ("posts", "latitude", "FLOAT"),
+        ("posts", "longitude", "FLOAT"),
+        ("posts", "place_name", "VARCHAR(500)"),
+        ("messages", "thread_id", "VARCHAR(500)"),
+    ]
+    for table, col, col_type in _alters:
         try:
-            await conn.execute(text(f"ALTER TABLE posts ADD COLUMN {col} {col_type}"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
         except Exception:
             pass
 

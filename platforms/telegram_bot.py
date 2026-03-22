@@ -45,15 +45,22 @@ async def _track_channel_post(post: dict) -> None:
 
 # ── Message processing ───────────────────────────────────────────────────────
 
-def _extract_post_context(message: dict) -> str:
-    """Extract the original post text from a reply_to_message (channel comment thread)."""
-    reply_to = message.get("reply_to_message")
-    if not reply_to:
-        return ""
-    fwd_origin = reply_to.get("forward_origin") or {}
-    if fwd_origin.get("type") == "channel":
-        return reply_to.get("text") or reply_to.get("caption") or ""
-    return reply_to.get("text") or reply_to.get("caption") or ""
+def _extract_thread_info(message: dict, is_group: bool) -> tuple[str, str]:
+    """Return (thread_id, post_context) for a message.
+
+    For group comments: thread = original channel post message_id, context = post text.
+    For private chats:  thread = "dm_{YYYY-MM-DD}" (daily session), context = "".
+    """
+    if is_group:
+        reply_to = message.get("reply_to_message")
+        if reply_to:
+            thread_id = f"post_{reply_to.get('message_id', '')}"
+            post_text = reply_to.get("text") or reply_to.get("caption") or ""
+            return thread_id, post_text
+        return f"group_{message['chat']['id']}", ""
+
+    from datetime import date
+    return f"dm_{date.today().isoformat()}", ""
 
 
 async def _process_message(message: dict) -> None:
@@ -77,8 +84,7 @@ async def _process_message(message: dict) -> None:
     if not text:
         return
 
-    post_context = _extract_post_context(message) if is_group_comment else ""
-
+    thread_id, post_context = _extract_thread_info(message, is_group_comment)
     sender_id = str(from_user.get("id", ""))
 
     try:
@@ -90,6 +96,7 @@ async def _process_message(message: dict) -> None:
                 sender_name=sender_name,
                 direction=MessageDirection.INCOMING,
                 text=text,
+                thread_id=thread_id,
                 category="comment" if is_group_comment else None,
                 replied=False,
             ))
@@ -99,10 +106,13 @@ async def _process_message(message: dict) -> None:
 
     try:
         async with async_session() as session:
-            prior_replies = await count_replies_to_sender(session, "telegram", sender_id)
+            prior_replies = await count_replies_to_sender(
+                session, "telegram", sender_id, thread_id,
+            )
 
         if prior_replies > MAX_REPLIES_PER_AUTHOR:
-            logger.info("Reply limit exceeded for sender=%s (%d), not replying", sender_id, prior_replies)
+            logger.info("Reply limit exceeded for sender=%s thread=%s (%d), not replying",
+                        sender_id, thread_id, prior_replies)
             async with async_session() as session:
                 result = await session.execute(
                     select(MsgModel).where(
@@ -137,7 +147,8 @@ async def _process_message(message: dict) -> None:
                     platform="telegram", platform_message_id=None,
                     sender_id="bot", sender_name="bot",
                     direction=MessageDirection.OUTGOING,
-                    text=reply_text, category=category, replied=True,
+                    text=reply_text, thread_id=thread_id,
+                    category=category, replied=True,
                 ))
                 result = await session.execute(
                     select(MsgModel).where(

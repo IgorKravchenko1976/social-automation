@@ -23,16 +23,23 @@ FAREWELL_MESSAGE = (
 
 
 async def count_replies_to_sender(
-    session: AsyncSession, platform: str, sender_id: str,
+    session: AsyncSession, platform: str, sender_id: str, thread_id: str = "",
 ) -> int:
-    """Count how many times we've already replied to this sender on this platform."""
+    """Count how many times we've already replied to this sender in this thread.
+
+    The limit is per author per thread (post or chat session), not global.
+    If thread_id is empty, falls back to counting all replies on the platform.
+    """
+    filters = [
+        Message.platform == platform,
+        Message.sender_id == sender_id,
+        Message.direction == MessageDirection.INCOMING,
+        Message.replied == True,
+    ]
+    if thread_id:
+        filters.append(Message.thread_id == thread_id)
     result = await session.execute(
-        select(sa_func.count(Message.id)).where(
-            Message.platform == platform,
-            Message.sender_id == sender_id,
-            Message.direction == MessageDirection.INCOMING,
-            Message.replied == True,
-        )
+        select(sa_func.count(Message.id)).where(*filters)
     )
     return result.scalar() or 0
 
@@ -61,14 +68,20 @@ async def respond_to_pending_messages() -> int:
                     msg.replied = True
                     continue
 
+                thread_id = msg.thread_id or ""
+                if not thread_id:
+                    from datetime import date
+                    thread_id = f"{msg.platform}_{date.today().isoformat()}"
+                    msg.thread_id = thread_id
+
                 prior_replies = await count_replies_to_sender(
-                    session, msg.platform, msg.sender_id or "",
+                    session, msg.platform, msg.sender_id or "", thread_id,
                 )
 
                 if prior_replies > MAX_REPLIES_PER_AUTHOR:
                     msg.replied = True
-                    logger.info("Reply limit exceeded for sender=%s (%d), skipping",
-                                msg.sender_id, prior_replies)
+                    logger.info("Reply limit exceeded for sender=%s thread=%s (%d), skipping",
+                                msg.sender_id, thread_id, prior_replies)
                     continue
 
                 platform = Platform(msg.platform)
