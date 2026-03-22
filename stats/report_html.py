@@ -252,6 +252,7 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
         for m in months_sorted
     )
     subs_rows = ""
+    views_rows = ""
     for pv in month_data:
         label = PLATFORM_LABELS.get(pv, pv)
         color = PLATFORM_COLORS.get(pv, "#888")
@@ -264,6 +265,17 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
             f'<tr><td style="padding:8px 10px;border-bottom:1px solid #262640;">'
             f'<span style="color:{color};font-weight:600;">{label}</span></td>{cells}</tr>'
         )
+        vcells = "".join(
+            f'<td style="padding:8px 10px;text-align:center;">'
+            f'{month_data[pv].get(m, {}).get("views", 0)}</td>'
+            for m in months_sorted
+        )
+        views_rows += (
+            f'<tr><td style="padding:8px 10px;border-bottom:1px solid #262640;">'
+            f'<span style="color:{color};font-weight:600;">{label}</span></td>{vcells}</tr>'
+        )
+
+    chart_views = make_monthly_chart(month_data, ["views"], "Перегляди по місяцях")
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
@@ -294,6 +306,15 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
       {month_headers}
     </tr></thead>
     <tbody>{subs_rows}</tbody>
+  </table>
+  <h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #38bdf8;padding-bottom:6px;margin-top:32px;">Перегляди по місяцях</h2>
+  <img src="data:image/png;base64,{chart_views}" style="width:100%;border-radius:8px;margin:12px 0;" alt="views chart"/>
+  <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;margin-top:8px;">
+    <thead><tr style="background:#1a1a2e;">
+      <th style="padding:8px 10px;text-align:left;color:#94a3b8;font-weight:400;">Платформа</th>
+      {month_headers}
+    </tr></thead>
+    <tbody>{views_rows}</tbody>
   </table>
   {post_schedule_section}
   {website_section}
