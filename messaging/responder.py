@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import select, or_, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.platforms import Platform, get_platform_instance
@@ -54,7 +54,7 @@ async def respond_to_pending_messages() -> int:
             select(Message).where(
                 Message.direction == MessageDirection.INCOMING,
                 Message.replied == False,
-                Message.category != "spam",
+                or_(Message.category != "spam", Message.category.is_(None)),
             )
         )
         messages = result.scalars().all()
@@ -125,6 +125,7 @@ async def respond_to_pending_messages() -> int:
                         text=reply_text,
                         category=category,
                         replied=True,
+                        thread_id=thread_id,
                     )
                     session.add(outgoing)
                     msg.replied = True
