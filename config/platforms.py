@@ -20,7 +20,9 @@ def configured_platforms() -> list[Platform]:
         configured.append(Platform.TELEGRAM)
     if not is_placeholder(settings.facebook_page_id) and not is_placeholder(settings.facebook_page_access_token):
         configured.append(Platform.FACEBOOK)
-    if not is_placeholder(settings.instagram_user_id) and not is_placeholder(settings.instagram_access_token):
+    if not is_placeholder(settings.facebook_page_id) and not is_placeholder(settings.facebook_page_access_token):
+        if Platform.FACEBOOK not in configured:
+            configured.append(Platform.FACEBOOK)
         configured.append(Platform.INSTAGRAM)
     if not is_placeholder(settings.twitter_bearer_token) and not is_placeholder(settings.twitter_api_key):
         configured.append(Platform.TWITTER)
