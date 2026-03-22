@@ -44,6 +44,17 @@ async def _track_channel_post(post: dict) -> None:
 
 # ── Message processing ───────────────────────────────────────────────────────
 
+def _extract_post_context(message: dict) -> str:
+    """Extract the original post text from a reply_to_message (channel comment thread)."""
+    reply_to = message.get("reply_to_message")
+    if not reply_to:
+        return ""
+    fwd_origin = reply_to.get("forward_origin") or {}
+    if fwd_origin.get("type") == "channel":
+        return reply_to.get("text") or reply_to.get("caption") or ""
+    return reply_to.get("text") or reply_to.get("caption") or ""
+
+
 async def _process_message(message: dict) -> None:
     text = message.get("text", "")
     chat_id = message["chat"]["id"]
@@ -55,8 +66,8 @@ async def _process_message(message: dict) -> None:
 
     if text.startswith("/start") or text.startswith("/help"):
         reply = (
-            "Привіт! \U0001f44b Я бот додатку I'M IN — додатку для мандрівників.\n\n"
-            "Напиши мені будь-яке питання про додаток, і я відповім!\n\n"
+            "Привіт! \U0001f44b Ми — команда I'M IN, додатку для мандрівників.\n\n"
+            "Напиши нам будь-яке питання, і ми відповімо!\n\n"
             "\U0001f30d Сайт: www.im-in.net\n\U0001f4f1 Скоро в App Store!"
         )
         await tg_request("sendMessage", chat_id=chat_id, text=reply, reply_to_message_id=message_id)
@@ -64,6 +75,8 @@ async def _process_message(message: dict) -> None:
 
     if not text:
         return
+
+    post_context = _extract_post_context(message) if is_group_comment else ""
 
     try:
         async with async_session() as session:
@@ -85,7 +98,8 @@ async def _process_message(message: dict) -> None:
         from content.generator import generate_auto_reply
 
         reply_text, category = await generate_auto_reply(
-            incoming_message=text, platform=Platform.TELEGRAM, sender_name=sender_name,
+            incoming_message=text, platform=Platform.TELEGRAM,
+            sender_name=sender_name, post_context=post_context,
         )
 
         if category == "spam":

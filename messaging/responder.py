@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config.platforms import Platform, get_platform_instance
 from content.generator import generate_auto_reply
 from db.database import async_session
-from db.models import Message, MessageDirection
+from db.models import Message, MessageDirection, Publication, Post
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +38,12 @@ async def respond_to_pending_messages() -> int:
                     continue
 
                 platform = Platform(msg.platform)
+                post_context = await _find_post_context(session, msg)
                 reply_text, category = await generate_auto_reply(
                     incoming_message=msg.text,
                     platform=platform,
                     sender_name=msg.sender_name or "",
+                    post_context=post_context,
                 )
 
                 msg.category = category
@@ -91,6 +93,40 @@ async def respond_to_pending_messages() -> int:
                      replied_count, fail_count, len(messages) - replied_count - fail_count)
 
     return replied_count
+
+
+async def _find_post_context(session: AsyncSession, msg: Message) -> str:
+    """Try to find the original post content for a comment/reply.
+
+    Looks for the most recent published post on the same platform
+    (within the last day) as a likely context for the comment.
+    """
+    try:
+        from config.settings import get_today_start_utc
+        today = get_today_start_utc()
+
+        result = await session.execute(
+            select(Post)
+            .join(Publication)
+            .where(
+                Publication.platform == msg.platform,
+                Publication.status == "published",
+                Post.created_at >= today,
+            )
+            .order_by(Publication.published_at.desc())
+            .limit(1)
+        )
+        post = result.scalar_one_or_none()
+        if post:
+            parts = []
+            if post.title:
+                parts.append(post.title)
+            if post.content_raw:
+                parts.append(post.content_raw[:1000])
+            return "\n".join(parts)
+    except Exception:
+        logger.warning("Could not find post context for msg_id=%s", msg.id)
+    return ""
 
 
 async def _notify_admin(msg: Message) -> None:
