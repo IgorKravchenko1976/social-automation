@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = "https://www.im-in.net"
 BLOG_DIR_NAME = "blog"
-THUMB_SIZE = (120, 120)
-THUMB_QUALITY = 75
+THUMB_SIZE = (260, 150)
+THUMB_QUALITY = 80
 
 
 def _blog_dir() -> Path:
