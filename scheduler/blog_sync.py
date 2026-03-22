@@ -29,7 +29,6 @@ async def sync_blog_to_vps() -> int:
     all_files = list(set(generated + thumbs))
 
     sitemap_file = blog_dir / "sitemap.xml"
-    sitemap_to_root = sitemap_file if sitemap_file.is_file() else None
 
     has_creds = settings.vps_ssh_host and (settings.vps_ssh_password or settings.vps_ssh_key)
     if not has_creds:
@@ -39,10 +38,35 @@ async def sync_blog_to_vps() -> int:
     blog_files = [f for f in all_files if f.name != "sitemap.xml"]
     pushed = _sftp_push(blog_files)
 
-    if sitemap_to_root:
-        pushed += _sftp_push_to_root([sitemap_to_root])
+    root_files: list[Path] = []
+    if sitemap_file.is_file():
+        root_files.append(sitemap_file)
+    root_files.extend(_fetch_website_files())
+    if root_files:
+        pushed += _sftp_push_to_root(root_files)
 
     return pushed
+
+
+def _fetch_website_files() -> list[Path]:
+    """Download latest website files from GitHub and return local paths."""
+    import tempfile, httpx
+    base = "https://raw.githubusercontent.com/IgorKravchenko1976/im-in-website/main"
+    files_to_sync = ["blog.html", "index.html", "robots.txt", "sitemap.xml",
+                     "terms.html", "privacy.html", "404.html"]
+    result = []
+    tmp_dir = Path(tempfile.mkdtemp(prefix="vps_sync_"))
+    for fname in files_to_sync:
+        try:
+            resp = httpx.get(f"{base}/{fname}", timeout=15, follow_redirects=True)
+            if resp.status_code == 200:
+                local = tmp_dir / fname
+                local.write_bytes(resp.content)
+                result.append(local)
+        except Exception:
+            logger.debug("Could not fetch %s from GitHub", fname)
+    logger.info("Fetched %d website files from GitHub for VPS sync", len(result))
+    return result
 
 
 def _sftp_push(files: list[Path]) -> int:
