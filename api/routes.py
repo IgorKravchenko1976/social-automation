@@ -113,6 +113,89 @@ class StatsOut(BaseModel):
 public_router = APIRouter(prefix="/api", tags=["public"])
 
 
+@public_router.get("/debug/comment-check")
+async def public_comment_check():
+    """Temporary public diagnostic for comment system."""
+    import httpx
+    from stats.token_renewer import get_active_token
+    from config.platforms import FACEBOOK_GRAPH_API
+
+    report = {"facebook": {}, "instagram": {}}
+    fb_token = await get_active_token("facebook") or settings.facebook_page_access_token
+    page_id = settings.facebook_page_id
+
+    if not fb_token:
+        report["facebook"] = {"error": "No token"}
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/debug_token",
+                    params={"input_token": fb_token, "access_token": fb_token},
+                )
+                debug_data = r.json().get("data", {})
+                scopes = debug_data.get("scopes", [])
+                report["facebook"]["valid"] = debug_data.get("is_valid", False)
+                report["facebook"]["scopes"] = scopes
+                needed = ["pages_read_engagement", "pages_manage_engagement"]
+                report["facebook"]["missing"] = [s for s in needed if s not in scopes]
+
+                r2 = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{page_id}/feed",
+                    params={
+                        "access_token": fb_token,
+                        "fields": "id,comments.limit(2){id,from,message}",
+                        "limit": 3,
+                    },
+                )
+                feed = r2.json()
+                if "error" in feed:
+                    report["facebook"]["feed_error"] = feed["error"].get("message")
+                else:
+                    posts = feed.get("data", [])
+                    comments = []
+                    for p in posts:
+                        for c in p.get("comments", {}).get("data", []):
+                            comments.append({"from": c.get("from", {}).get("name"), "text": c.get("message", "")[:60]})
+                    report["facebook"]["posts_checked"] = len(posts)
+                    report["facebook"]["comments_found"] = len(comments)
+                    report["facebook"]["sample_comments"] = comments[:5]
+
+                ig_r = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{page_id}",
+                    params={"access_token": fb_token, "fields": "instagram_business_account"},
+                )
+                ig_id = ig_r.json().get("instagram_business_account", {}).get("id")
+                if ig_id:
+                    report["instagram"]["ig_id"] = ig_id
+                    ig_media = await client.get(
+                        f"{FACEBOOK_GRAPH_API}/{ig_id}/media",
+                        params={
+                            "access_token": fb_token,
+                            "fields": "id,comments.limit(2){id,from,text}",
+                            "limit": 3,
+                        },
+                    )
+                    ig_data = ig_media.json()
+                    if "error" in ig_data:
+                        report["instagram"]["error"] = ig_data["error"].get("message")
+                    else:
+                        items = ig_data.get("data", [])
+                        ig_comments = []
+                        for m in items:
+                            for c in m.get("comments", {}).get("data", []):
+                                ig_comments.append({"from": c.get("from", {}).get("username", "?"), "text": c.get("text", "")[:60]})
+                        report["instagram"]["media_checked"] = len(items)
+                        report["instagram"]["comments_found"] = len(ig_comments)
+                        report["instagram"]["sample_comments"] = ig_comments[:5]
+                else:
+                    report["instagram"]["error"] = "No IG Business Account linked"
+        except Exception as e:
+            report["facebook"]["error"] = str(e)
+
+    return report
+
+
 @public_router.get("/blog/posts", response_model=list[BlogPostOut])
 async def blog_posts(
     limit: int = Query(10, le=50),
