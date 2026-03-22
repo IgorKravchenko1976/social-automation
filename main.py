@@ -25,7 +25,7 @@ scheduler = AsyncIOScheduler(timezone=settings.timezone)
 
 
 def _setup_scheduler() -> None:
-    from scheduler.jobs import create_daily_posts, publish_scheduled_post, retry_failed_publications
+    from scheduler.jobs import publish_scheduled_post, retry_failed_publications
     from scheduler.jobs import publish_missed_slots
     from scheduler.health_check import run_health_check
     from messaging.monitor import poll_all_messages
@@ -34,9 +34,6 @@ def _setup_scheduler() -> None:
     from stats.token_renewer import renew_all_tokens
 
     tz = settings.timezone
-
-    scheduler.add_job(create_daily_posts, CronTrigger(hour=8, minute=0, timezone=tz),
-                      id="create_daily_posts", replace_existing=True)
 
     for idx, time_str in enumerate(settings.post_schedule):
         hour, minute = map(int, time_str.split(":"))

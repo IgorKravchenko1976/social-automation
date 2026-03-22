@@ -33,9 +33,8 @@ MAX_RETRIES = 3
 
 
 async def ensure_daily_posts_exist() -> None:
-    """Create today's posts if insufficient for the schedule (called at startup)."""
+    """Log today's post status. Posts are created fresh before each slot."""
     today_start_utc = get_today_start_utc()
-    expected = len(settings.post_schedule)
 
     async with async_session() as session:
         result = await session.execute(
@@ -43,78 +42,51 @@ async def ensure_daily_posts_exist() -> None:
         )
         count = result.scalar() or 0
 
-    if count < expected:
-        if count > 0:
-            logger.info(
-                "Found %d post(s) for today but need %d — marking old ones and creating fresh set",
-                count, expected,
-            )
-            async with async_session() as session:
-                old_pubs = await session.execute(
-                    select(Publication)
-                    .join(Post)
-                    .where(
-                        Post.created_at >= today_start_utc,
-                        Publication.status == PostStatus.QUEUED,
-                    )
-                )
-                for pub in old_pubs.scalars().all():
-                    pub.status = PostStatus.FAILED
-                    pub.error_message = "Replaced by new schedule"
-                await session.commit()
-
-        logger.info("Creating %d posts for today's schedule", expected)
-        await create_daily_posts()
-    else:
-        logger.info("Found %d post(s) for today (need %d) — OK", count, expected)
+    expected = len(settings.post_schedule)
+    logger.info(
+        "Posts today: %d created, %d slots remaining — each slot creates fresh content on demand",
+        count, expected,
+    )
 
 
 async def publish_missed_slots() -> None:
     """Publish posts for time slots that were missed (e.g. after a restart).
 
-    For each past time slot today, checks if the corresponding post still has
-    queued publications, and publishes if so.
+    For each past time slot today, counts how many posts were already published
+    today. If fewer than expected for past slots, creates and publishes fresh ones.
     """
     now_local = get_now_local()
     today_start_utc = get_today_start_utc()
 
     async with async_session() as session:
-        today_posts_result = await session.execute(
-            select(Post)
+        result = await session.execute(
+            select(sa_func.count(Post.id))
             .where(Post.created_at >= today_start_utc)
-            .order_by(Post.created_at)
+            .join(Publication)
+            .where(Publication.status == PostStatus.PUBLISHED)
         )
-        today_posts = today_posts_result.scalars().all()
+        published_today = result.scalar() or 0
 
+    slots_that_should_have_run = 0
     for idx, time_str in enumerate(settings.post_schedule):
         slot_time = parse_slot_time(time_str, now_local)
+        if now_local > slot_time:
+            slots_that_should_have_run += 1
 
-        if now_local <= slot_time:
-            continue
-
-        if idx >= len(today_posts):
-            continue
-
-        post = today_posts[idx]
-        async with async_session() as session:
-            result = await session.execute(
-                select(sa_func.count(Publication.id))
-                .where(
-                    Publication.post_id == post.id,
-                    Publication.status == PostStatus.QUEUED,
-                )
-            )
-            queued = result.scalar() or 0
-
-        if queued > 0:
-            logger.info(
-                "Missed slot %d (%s) post_id=%d — publishing now (%d queued pubs)",
-                idx, time_str, post.id, queued,
-            )
+    missed = slots_that_should_have_run - published_today
+    if missed > 0:
+        logger.info("=== CATCHUP === %d missed slot(s), publishing now", missed)
+        for i in range(missed):
+            slot_idx = published_today + i
+            if slot_idx >= len(settings.post_schedule):
+                break
             try:
-                await publish_scheduled_post(idx)
+                await publish_scheduled_post(slot_idx)
             except Exception:
-                logger.exception("Error publishing missed slot %d", idx)
+                logger.exception("Error publishing missed slot %d", slot_idx)
+    else:
+        logger.info("=== CATCHUP === No missed slots (published=%d, expected=%d)",
+                     published_today, slots_that_should_have_run)
 
 
 async def _get_recent_titles(session: AsyncSession, days: int = 60) -> list[str]:
@@ -333,12 +305,95 @@ async def create_daily_posts() -> None:
             )
 
 
-async def publish_scheduled_post(time_slot: int) -> None:
-    """Publish the post for a specific time slot (0-4).
+SLOT_CONTENT_TYPES = ["tourism_news", "active_travel", "leisure_travel", "tourism_news", "feature"]
 
-    Only considers today's posts that still have QUEUED publications.
-    Picks the Nth queued post (by creation time) for the given slot index.
+
+async def create_single_post(content_type: str) -> Optional[Post]:
+    """Create ONE fresh post of the given type. Returns the Post or None."""
+    logger.info("=== FRESH === Creating single post type=%s", content_type)
+
+    async with async_session() as session:
+        recent_titles = await _get_recent_titles(session, days=60)
+        post: Optional[Post] = None
+
+        if content_type == "tourism_news":
+            entries = await _fetch_tourism_news(session, count=1)
+            if entries:
+                entry = entries[0]
+                source_name = entry.get("source_name", "")
+                pub_date = entry.get("published")
+                date_str = pub_date.strftime("%d.%m.%Y") if pub_date else ""
+                date_line = f"Дата публікації: {date_str}\n" if date_str else ""
+                content = (
+                    f"{date_line}"
+                    f"{entry['title']}\n\n"
+                    f"{entry.get('summary', '')}\n\n"
+                    f"Джерело: {source_name}\n{entry['link']}"
+                )
+                post = Post(
+                    title=entry["title"][:200],
+                    content_raw=content,
+                    source="rss",
+                    source_url=entry["link"],
+                    source_published_at=pub_date,
+                )
+            else:
+                logger.info("=== FRESH === No RSS news, falling back to leisure_travel")
+                content_type = "leisure_travel"
+
+        if content_type == "active_travel":
+            topic = await _pick_unique_topic(session, ACTIVE_DIRECTIONS, "active_travel", recent_titles)
+            post = Post(title=topic[:200], content_raw=topic, source="ai")
+
+        elif content_type == "leisure_travel":
+            topic = await _pick_unique_topic(session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles)
+            post = Post(title=topic[:200], content_raw=topic, source="ai")
+
+        elif content_type == "feature":
+            today_start_utc = get_today_start_utc()
+            result = await session.execute(
+                select(Post.title).where(Post.created_at >= today_start_utc, Post.title.isnot(None)).limit(5)
+            )
+            recent_today = [r[0] for r in result.all() if r[0]]
+            travel_context = random.choice(recent_today) if recent_today else ""
+            topic = await _pick_feature_topic(session, FEATURE_DIRECTIONS, recent_titles, travel_context)
+            post = Post(title=topic[:200], content_raw=topic, source="ai")
+
+        if not post:
+            logger.warning("=== FRESH === Failed to create post type=%s", content_type)
+            return None
+
+        session.add(post)
+        await session.flush()
+
+        for platform in ALL_PLATFORMS:
+            session.add(Publication(post_id=post.id, platform=platform.value))
+
+        await _enrich_post_with_geo(post)
+
+        try:
+            import json as _json
+            tr = await translate_post(post.title or "", post.content_raw or "")
+            if tr:
+                post.translations = _json.dumps(tr, ensure_ascii=False)
+        except Exception:
+            logger.warning("Translation failed for post_id=%s", post.id)
+
+        await session.commit()
+        logger.info("=== FRESH === Created post_id=%d type=%s title='%s'",
+                     post.id, content_type, (post.title or "")[:50])
+        return post
+
+
+async def publish_scheduled_post(time_slot: int) -> None:
+    """Create a FRESH post and publish it immediately.
+
+    Each slot has a content type (news, active, leisure, feature).
+    The post is created right before publishing for maximum freshness.
     """
+    content_type = SLOT_CONTENT_TYPES[time_slot] if time_slot < len(SLOT_CONTENT_TYPES) else "leisure_travel"
+    logger.info("=== PUBLISH === Slot %d: content_type=%s — creating fresh post", time_slot, content_type)
+
     today_start_utc = get_today_start_utc()
 
     async with async_session() as session:
@@ -354,14 +409,20 @@ async def publish_scheduled_post(time_slot: int) -> None:
         )
         queued_posts = queued_posts_result.scalars().all()
 
-        if not queued_posts:
-            logger.warning("=== PUBLISH === No queued posts for slot %d — all may be published or none created", time_slot)
+    if queued_posts:
+        post = queued_posts[0]
+        logger.info("=== PUBLISH === Found pre-created post_id=%d, publishing it first", post.id)
+    else:
+        post = await create_single_post(content_type)
+        if not post:
+            logger.warning("=== PUBLISH === Failed to create post for slot %d", time_slot)
             return
 
-        post = queued_posts[0]
+    async with async_session() as session:
+        post = await session.merge(post)
         logger.info(
-            "=== PUBLISH === Slot %d: post_id=%d '%s' (%d queued remaining)",
-            time_slot, post.id, (post.title or "")[:50], len(queued_posts),
+            "=== PUBLISH === Slot %d: post_id=%d '%s'",
+            time_slot, post.id, (post.title or "")[:50],
         )
 
         pubs_result = await session.execute(
