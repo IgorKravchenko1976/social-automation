@@ -246,6 +246,17 @@ async def public_fix_geo():
     return {"total_without_geo": len(posts), "fixed": len([f for f in fixed if "place" in f]), "details": fixed}
 
 
+@public_router.get("/debug/blog-sync")
+async def public_blog_sync():
+    """Trigger blog regeneration + SFTP sync to VPS."""
+    from scheduler.blog_sync import sync_blog_to_vps
+    try:
+        count = await sync_blog_to_vps()
+        return {"status": "ok", "synced_files": count}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @public_router.get("/debug/regenerate-content")
 async def public_regenerate_content(limit: int = 3, offset: int = 0):
     """Re-generate full text for posts with short content_raw. Process in small batches."""
