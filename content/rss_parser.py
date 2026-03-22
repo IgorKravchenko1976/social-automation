@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import feedparser
 import httpx
@@ -13,17 +13,25 @@ from db.models import RSSSource, Post
 logger = logging.getLogger(__name__)
 
 
+MAX_AGE_HOURS = 48
+
+
 async def fetch_feed(url: str) -> list[dict]:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url)
         resp.raise_for_status()
 
     feed = feedparser.parse(resp.text)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=MAX_AGE_HOURS)
     entries = []
-    for entry in feed.entries[:10]:
+    for entry in feed.entries[:20]:
         published = None
         if hasattr(entry, "published_parsed") and entry.published_parsed:
             published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+
+        if published and published < cutoff:
+            continue
 
         entries.append({
             "title": getattr(entry, "title", ""),

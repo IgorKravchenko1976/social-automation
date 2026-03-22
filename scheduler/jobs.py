@@ -230,7 +230,11 @@ async def create_daily_posts() -> None:
         logger.info("=== CREATE POSTS === RSS entries found: %d", len(news_entries))
         for entry in news_entries:
             source_name = entry.get("source_name", "")
+            pub_date = entry.get("published")
+            date_str = pub_date.strftime("%d.%m.%Y") if pub_date else ""
+            date_line = f"Дата публікації: {date_str}\n" if date_str else ""
             content = (
+                f"{date_line}"
                 f"{entry['title']}\n\n"
                 f"{entry.get('summary', '')}\n\n"
                 f"Джерело: {source_name}\n{entry['link']}"
