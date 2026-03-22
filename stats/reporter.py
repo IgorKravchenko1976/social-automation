@@ -76,6 +76,29 @@ async def _send_email(subject: str, html: str) -> None:
             raise RuntimeError(f"Resend API error {resp.status_code}: {resp.text}")
 
 
+async def _check_blog_api() -> dict:
+    """Ping the public blog endpoint and return status summary."""
+    base_url = settings.webhook_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{base_url}/api/blog/posts", params={"limit": 50})
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"HTTP {resp.status_code}"}
+        posts = resp.json()
+        if not posts:
+            return {"ok": True, "total_posts": 0, "last_title": "—", "last_date": "—"}
+        first = posts[0]
+        last_date = (first.get("published_at") or first.get("created_at") or "")[:10]
+        return {
+            "ok": True,
+            "total_posts": len(posts),
+            "last_title": first.get("title") or "(без заголовку)",
+            "last_date": last_date,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:120]}
+
+
 async def send_daily_report() -> None:
     """Collect stats, build report, send email via Resend."""
     from stats.collector import collect_all_stats
@@ -83,6 +106,7 @@ async def send_daily_report() -> None:
     from stats.report_html import (
         build_html, build_post_schedule_section,
         build_token_section, build_token_urgent_email,
+        build_website_section,
     )
 
     if not settings.resend_api_key or not settings.report_email_to:
@@ -103,7 +127,12 @@ async def send_daily_report() -> None:
     token_statuses = await check_all_tokens()
     token_section = build_token_section(token_statuses)
 
-    html = build_html(today_stats, month_data, date_str, token_section, post_schedule_section)
+    blog_status = await _check_blog_api()
+    website_section = build_website_section(blog_status)
+    logger.info("=== REPORT === Blog API: %s", "OK" if blog_status["ok"] else blog_status.get("error"))
+
+    html = build_html(today_stats, month_data, date_str, token_section, post_schedule_section,
+                      website_section)
 
     logger.info("=== REPORT === Sending via Resend API to %s ...", settings.report_email_to)
     try:

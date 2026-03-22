@@ -220,7 +220,8 @@ def build_token_section(token_statuses: list) -> str:
 
 
 def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
-               token_section: str = "", post_schedule_section: str = "") -> str:
+               token_section: str = "", post_schedule_section: str = "",
+               website_section: str = "") -> str:
     """Build full HTML email body."""
     rows_html = ""
     for s in today_stats:
@@ -295,11 +296,48 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
     <tbody>{subs_rows}</tbody>
   </table>
   {post_schedule_section}
+  {website_section}
   {token_section}
   <p style="color:#64748b;font-size:12px;margin-top:32px;text-align:center;">
     Автоматичний звіт від I'M IN Social Automation &bull; www.im-in.net
   </p>
 </div></body></html>"""
+
+
+def build_website_section(blog_status: dict) -> str:
+    """Build HTML section showing blog/website health."""
+    ok = blog_status.get("ok", False)
+    total = blog_status.get("total_posts", 0)
+    last_title = blog_status.get("last_title", "—")
+    last_date = blog_status.get("last_date", "—")
+    error = blog_status.get("error", "")
+
+    if ok:
+        status_html = f'<span style="color:#6ee7b7;font-weight:700;">✅ Онлайн</span>'
+        detail = (
+            f'<span style="color:#e2e8f0;">{total}</span> постів доступно &bull; '
+            f'Останній: <span style="color:#e2e8f0;">{last_title[:50]}</span> '
+            f'<span style="color:#94a3b8;">({last_date})</span>'
+        )
+    else:
+        status_html = f'<span style="color:#f87171;font-weight:700;">❌ Помилка</span>'
+        detail = f'<span style="color:#f87171;">{error or "API недоступний"}</span>'
+
+    return (
+        '<h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #8b5cf6;'
+        'padding-bottom:6px;margin-top:32px;">Сайт / Блог</h2>'
+        '<table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;">'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;width:140px;">'
+        '<span style="font-weight:600;">im-in.net/blog</span></td>'
+        f'<td style="padding:10px 8px;border-bottom:1px solid #262640;">{status_html}</td>'
+        '</tr>'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;color:#94a3b8;">Деталі</td>'
+        f'<td style="padding:10px 8px;border-bottom:1px solid #262640;">{detail}</td>'
+        '</tr>'
+        '</table>'
+    )
 
 
 def build_token_urgent_email(expiring: list) -> str:
