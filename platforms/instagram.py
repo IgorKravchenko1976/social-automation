@@ -35,19 +35,26 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                         f"{GRAPH_API}/{settings.facebook_page_id}",
                         params={
                             "access_token": self._token,
-                            "fields": "instagram_business_account",
+                            "fields": "instagram_business_account,name",
                         },
                     )
                     data = resp.json()
-                    ig_account = data.get("instagram_business_account", {})
-                    ig_id = ig_account.get("id")
-                    if ig_id:
-                        logger.info("Resolved IG Business Account ID: %s (from FB page %s)",
-                                    ig_id, settings.facebook_page_id)
-                        self._resolved_ig_id = ig_id
-                        return ig_id
+                    logger.info("FB Page response for IG discovery: %s", data)
+                    if "error" in data:
+                        logger.error("FB Page API error: %s", data["error"].get("message", data["error"]))
+                    else:
+                        ig_account = data.get("instagram_business_account", {})
+                        ig_id = ig_account.get("id")
+                        if ig_id:
+                            logger.info("Resolved IG Business Account ID: %s (from FB page '%s')",
+                                        ig_id, data.get("name", settings.facebook_page_id))
+                            self._resolved_ig_id = ig_id
+                            return ig_id
+                        else:
+                            logger.warning("No instagram_business_account found on FB page %s (%s)",
+                                           settings.facebook_page_id, data.get("name", "?"))
             except Exception:
-                logger.warning("Could not resolve IG Business Account ID from Facebook Page")
+                logger.exception("Could not resolve IG Business Account ID from Facebook Page")
 
         self._resolved_ig_id = settings.instagram_user_id
         return self._resolved_ig_id
