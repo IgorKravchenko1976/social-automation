@@ -13,7 +13,7 @@ from config.settings import settings, get_today_start_utc, get_now_local, parse_
 from content.generator import generate_post_text
 from content.product_knowledge import FEATURE_TOPICS
 from content.tourism_topics import TOURISM_RSS_FEEDS, ACTIVE_SPORTS_PLACES, LEISURE_TRAVEL_PLACES, BANNED_RSS_KEYWORDS
-from content.media import get_image_for_post, create_slideshow_video
+from content.media import get_image_for_post, create_slideshow_video, cleanup_media_file
 from content.rss_parser import fetch_feed
 from db.database import async_session
 from db.models import Post, Publication, PostStatus, KVStore
@@ -307,6 +307,27 @@ async def publish_scheduled_post(time_slot: int) -> None:
 
         await session.commit()
 
+        await _cleanup_post_media(session, post)
+
+
+async def _cleanup_post_media(session: AsyncSession, post: Post) -> None:
+    """Delete local media files once no queued publications remain for the post."""
+    remaining = await session.execute(
+        select(sa_func.count())
+        .select_from(Publication)
+        .where(Publication.post_id == post.id, Publication.status == PostStatus.QUEUED)
+    )
+    if remaining.scalar() > 0:
+        return
+
+    cleanup_media_file(post.image_path)
+    cleanup_media_file(post.video_path)
+    if post.image_path or post.video_path:
+        post.image_path = None
+        post.video_path = None
+        await session.commit()
+        logger.info("Media cleaned up for post_id=%d", post.id)
+
 
 def _detect_content_type(post: Post) -> str:
     """Determine content type from post title/content for correct AI prompt."""
@@ -376,6 +397,7 @@ async def _publish_single(
                 )
                 if video_path:
                     result = await adapter.publish_video(pub.content_adapted, video_path)
+                    cleanup_media_file(video_path)
                 else:
                     result = await adapter.publish_text(pub.content_adapted)
             else:

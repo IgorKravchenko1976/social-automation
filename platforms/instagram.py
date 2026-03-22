@@ -7,7 +7,7 @@ from typing import Optional
 import httpx
 
 from config.settings import settings
-from config.platforms import Platform, INSTAGRAM_GRAPH_API as GRAPH_API
+from config.platforms import Platform, INSTAGRAM_GRAPH_API as GRAPH_API, FACEBOOK_GRAPH_API
 from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin
 
 logger = logging.getLogger(__name__)
@@ -44,21 +44,14 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
     async def _publish_with_image(
         self, client: httpx.AsyncClient, caption: str, image_path: str
     ) -> PublishResult:
-        image_url = await self._upload_image_and_get_url(image_path)
+        image_url = await self._get_public_image_url(client, image_path)
         if not image_url:
-            with open(image_path, "rb") as f:
-                image_data = f.read()
-            import base64
-            logger.error("Cannot get public URL for image, Instagram requires a public URL")
-            return PublishResult(success=False, error="Instagram requires a publicly accessible image URL")
+            return PublishResult(success=False, error="Could not get public URL for image")
 
         resp = await client.post(
             f"{GRAPH_API}/{self._user_id}/media",
             params={"access_token": self._token},
-            data={
-                "image_url": image_url,
-                "caption": caption[:2200],
-            },
+            data={"image_url": image_url, "caption": caption[:2200]},
         )
         data = resp.json()
         if "error" in data:
@@ -72,13 +65,10 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
         await asyncio.sleep(5)
 
-        for attempt in range(6):
+        for _ in range(6):
             status_resp = await client.get(
                 f"{GRAPH_API}/{container_id}",
-                params={
-                    "access_token": self._token,
-                    "fields": "status_code",
-                },
+                params={"access_token": self._token, "fields": "status_code"},
             )
             status_data = status_resp.json()
             status_code = status_data.get("status_code", "")
@@ -101,40 +91,58 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
         return PublishResult(success=True, platform_post_id=pub_data.get("id"))
 
-    async def _upload_image_and_get_url(self, image_path: str) -> str | None:
-        """Upload image to a temporary public host and return the URL.
-        Uses transfer.sh or similar; falls back to None.
-        """
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                with open(image_path, "rb") as f:
-                    resp = await client.put(
-                        f"https://transfer.sh/{image_path.split('/')[-1]}",
-                        content=f.read(),
-                        headers={"Content-Type": "image/jpeg"},
-                    )
-                if resp.status_code == 200:
-                    url = resp.text.strip()
-                    logger.info("Image uploaded for Instagram: %s", url)
-                    return url
-        except Exception:
-            logger.warning("transfer.sh upload failed, trying alternative")
+    async def _get_public_image_url(self, client: httpx.AsyncClient, image_path: str) -> str | None:
+        """Get a public URL for the image by uploading as unpublished Facebook photo."""
+        fb_token = await self._get_fb_token()
+        if fb_token and settings.facebook_page_id:
+            url = await self._upload_via_facebook(client, image_path, fb_token)
+            if url:
+                return url
 
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                with open(image_path, "rb") as f:
-                    resp = await client.post(
-                        "https://0x0.st",
-                        files={"file": ("image.jpg", f, "image/jpeg")},
-                    )
-                if resp.status_code == 200:
-                    url = resp.text.strip()
-                    logger.info("Image uploaded for Instagram (0x0.st): %s", url)
-                    return url
-        except Exception:
-            logger.warning("0x0.st upload failed")
-
+        logger.error("No method available to get public image URL for Instagram")
         return None
+
+    async def _get_fb_token(self) -> str | None:
+        from stats.token_renewer import get_active_token
+        return await get_active_token("facebook") or settings.facebook_page_access_token or None
+
+    async def _upload_via_facebook(
+        self, client: httpx.AsyncClient, image_path: str, fb_token: str,
+    ) -> str | None:
+        """Upload image as unpublished Facebook photo, return the public source URL."""
+        try:
+            with open(image_path, "rb") as f:
+                resp = await client.post(
+                    f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/photos",
+                    params={"access_token": fb_token},
+                    data={"published": "false"},
+                    files={"source": ("image.jpg", f, "image/jpeg")},
+                )
+            data = resp.json()
+            if "error" in data:
+                logger.warning("Facebook unpublished photo upload failed: %s",
+                               data["error"].get("message", data["error"]))
+                return None
+
+            photo_id = data.get("id")
+            if not photo_id:
+                return None
+
+            img_resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{photo_id}",
+                params={"access_token": fb_token, "fields": "images"},
+            )
+            img_data = img_resp.json()
+            images = img_data.get("images", [])
+            if images:
+                url = images[0].get("source", "")
+                logger.info("Got public image URL via Facebook: %s", url[:80])
+                return url
+
+            return None
+        except Exception:
+            logger.exception("Facebook image upload for Instagram failed")
+            return None
 
     async def publish_video(self, text: str, video_path: str) -> PublishResult:
         return PublishResult(success=False, error="Instagram video publishing not yet implemented via API")

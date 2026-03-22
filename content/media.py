@@ -12,6 +12,19 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
+def cleanup_media_file(file_path: str | None) -> None:
+    """Delete a local media file if it exists. Called after publishing is done."""
+    if not file_path:
+        return
+    try:
+        p = Path(file_path)
+        if p.exists() and p.is_file():
+            p.unlink()
+            logger.info("Cleaned up media file: %s", p.name)
+    except Exception:
+        logger.warning("Failed to delete media file: %s", file_path)
+
 def _get_media_dir() -> Path:
     d = Path(settings.media_cache_dir)
     d.mkdir(parents=True, exist_ok=True)
@@ -118,7 +131,7 @@ async def create_slideshow_video(
                 text=text_overlay,
                 font_size=40,
                 color="white",
-                bg_color="rgba(0,0,0,0.5)",
+                bg_color=(0, 0, 0, 128),
                 size=(video.w - 40, None),
                 method="caption",
             )
