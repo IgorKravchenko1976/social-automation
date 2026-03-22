@@ -204,6 +204,115 @@ async def test_facebook_post():
             "post_id": result.platform_post_id, "error": result.error}
 
 
+@router.get("/debug/comment-system")
+async def debug_comment_system():
+    """Full diagnostic: token permissions, comment reading, reply capability."""
+    import httpx
+    from stats.token_renewer import get_active_token
+
+    report = {"facebook": {}, "instagram": {}}
+
+    fb_token = await get_active_token("facebook") or settings.facebook_page_access_token
+    page_id = settings.facebook_page_id
+
+    if not fb_token or is_placeholder(fb_token):
+        report["facebook"]["error"] = "No Facebook token configured"
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/debug_token",
+                    params={"input_token": fb_token, "access_token": fb_token},
+                )
+                debug_data = r.json().get("data", {})
+                scopes = debug_data.get("scopes", [])
+                report["facebook"]["token_valid"] = debug_data.get("is_valid", False)
+                report["facebook"]["scopes"] = scopes
+
+                needed = ["pages_read_engagement", "pages_manage_engagement", "pages_show_list"]
+                missing = [s for s in needed if s not in scopes]
+                report["facebook"]["missing_permissions"] = missing
+                report["facebook"]["comments_can_read"] = "pages_read_engagement" in scopes
+                report["facebook"]["comments_can_reply"] = "pages_manage_engagement" in scopes
+
+                r2 = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{page_id}/feed",
+                    params={
+                        "access_token": fb_token,
+                        "fields": "id,message,comments.limit(2){id,from,message}",
+                        "limit": 3,
+                    },
+                )
+                feed = r2.json()
+                if "error" in feed:
+                    report["facebook"]["feed_error"] = feed["error"].get("message", str(feed["error"]))
+                else:
+                    posts = feed.get("data", [])
+                    total_comments = sum(
+                        len(p.get("comments", {}).get("data", []))
+                        for p in posts
+                    )
+                    report["facebook"]["recent_posts"] = len(posts)
+                    report["facebook"]["comments_found"] = total_comments
+                    if posts:
+                        report["facebook"]["sample_post"] = {
+                            "id": posts[0].get("id"),
+                            "text": (posts[0].get("message") or "")[:80],
+                            "comments": [
+                                {"from": c.get("from", {}).get("name"), "text": c.get("message", "")[:60]}
+                                for c in posts[0].get("comments", {}).get("data", [])
+                            ],
+                        }
+        except Exception as e:
+            report["facebook"]["error"] = str(e)
+
+    if fb_token and page_id:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{page_id}",
+                    params={"access_token": fb_token, "fields": "instagram_business_account"},
+                )
+                ig_data = r.json()
+                ig_id = ig_data.get("instagram_business_account", {}).get("id")
+                if ig_id:
+                    report["instagram"]["ig_business_id"] = ig_id
+                    r2 = await client.get(
+                        f"{FACEBOOK_GRAPH_API}/{ig_id}/media",
+                        params={
+                            "access_token": fb_token,
+                            "fields": "id,caption,comments.limit(2){id,from,text}",
+                            "limit": 3,
+                        },
+                    )
+                    media = r2.json()
+                    if "error" in media:
+                        report["instagram"]["media_error"] = media["error"].get("message", str(media["error"]))
+                    else:
+                        items = media.get("data", [])
+                        total_ig_comments = sum(
+                            len(m.get("comments", {}).get("data", []))
+                            for m in items
+                        )
+                        report["instagram"]["recent_media"] = len(items)
+                        report["instagram"]["comments_found"] = total_ig_comments
+                        if items:
+                            report["instagram"]["sample_media"] = {
+                                "id": items[0].get("id"),
+                                "caption": (items[0].get("caption") or "")[:80],
+                                "comments": [
+                                    {"from": c.get("from", {}).get("username", "?"), "text": c.get("text", "")[:60]}
+                                    for c in items[0].get("comments", {}).get("data", [])
+                                ],
+                            }
+                else:
+                    report["instagram"]["error"] = "No IG Business Account linked to FB Page"
+        except Exception as e:
+            report["instagram"]["error"] = str(e)
+
+    return report
+
+
 @router.get("/test/instagram-business-id")
 async def get_instagram_business_id():
     import httpx
