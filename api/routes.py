@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.platforms import Platform
+from config.settings import settings
 from db.database import get_session
 from db.models import Post, Publication, PostStatus, Message, MessageDirection, RSSSource
 
@@ -77,6 +81,22 @@ class AddRSSSourceRequest(BaseModel):
     url: str
 
 
+class BlogPostOut(BaseModel):
+    id: int
+    title: Optional[str]
+    content_raw: str
+    source: str
+    source_url: Optional[str]
+    latitude: Optional[float]
+    longitude: Optional[float]
+    place_name: Optional[str]
+    image_url: Optional[str]
+    published_at: Optional[datetime]
+    created_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
 class StatsOut(BaseModel):
     total_posts: int
     published: int
@@ -85,6 +105,76 @@ class StatsOut(BaseModel):
     total_messages_in: int
     total_messages_out: int
     messages_unanswered: int
+
+
+# ── Blog (public) ────────────────────────────────────────────────────────────
+
+@router.get("/blog/posts", response_model=list[BlogPostOut])
+async def blog_posts(
+    limit: int = Query(10, le=50),
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+):
+    """Public endpoint: returns only posts published on at least one platform."""
+    published_ids = (
+        select(Publication.post_id)
+        .where(Publication.status == PostStatus.PUBLISHED)
+        .group_by(Publication.post_id)
+        .subquery()
+    )
+
+    pub_date = (
+        select(
+            Publication.post_id,
+            func.max(Publication.published_at).label("published_at"),
+        )
+        .where(Publication.status == PostStatus.PUBLISHED)
+        .group_by(Publication.post_id)
+        .subquery()
+    )
+
+    result = await session.execute(
+        select(Post, pub_date.c.published_at)
+        .join(published_ids, Post.id == published_ids.c.post_id)
+        .outerjoin(pub_date, Post.id == pub_date.c.post_id)
+        .order_by(desc(pub_date.c.published_at))
+        .offset(offset)
+        .limit(limit)
+    )
+
+    base_url = settings.webhook_base_url.rstrip("/")
+    items: list[dict] = []
+    for post, published_at in result.all():
+        image_url = None
+        if post.image_path:
+            fname = Path(post.image_path).name
+            image_url = f"{base_url}/api/media/{fname}"
+        items.append(
+            BlogPostOut(
+                id=post.id,
+                title=post.title,
+                content_raw=post.content_raw,
+                source=post.source,
+                source_url=post.source_url,
+                latitude=post.latitude,
+                longitude=post.longitude,
+                place_name=post.place_name,
+                image_url=image_url,
+                published_at=published_at,
+                created_at=post.created_at,
+            )
+        )
+    return items
+
+
+@router.get("/media/{filename}")
+async def serve_media(filename: str):
+    """Serve images from media_cache so the website can display them."""
+    safe_name = Path(filename).name
+    file_path = Path(settings.media_cache_dir) / safe_name
+    if not file_path.is_file():
+        raise HTTPException(404, "File not found")
+    return FileResponse(file_path, headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ── Posts ─────────────────────────────────────────────────────────────────────
