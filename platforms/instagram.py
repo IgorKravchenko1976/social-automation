@@ -32,23 +32,23 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
         if self._publish_token and self._publish_ig_id:
             return self._publish_token, self._publish_ig_id
 
-        # Strategy 1: use dedicated Instagram token + configured user ID
-        ig_token = await self._get_ig_token()
-        if ig_token and settings.instagram_user_id:
-            self._publish_token = ig_token
-            self._publish_ig_id = settings.instagram_user_id
-            logger.info("Instagram credentials: using IG token + user_id %s", settings.instagram_user_id)
-            return self._publish_token, self._publish_ig_id
-
-        # Strategy 2: FB Page token + auto-discovered IG Business Account
+        # Primary: FB Page token + auto-discovered IG Business Account
         fb_token = await self._get_fb_token()
         if fb_token and settings.facebook_page_id:
             ig_id = await self._discover_ig_from_page(fb_token)
             if ig_id:
                 self._publish_token = fb_token
                 self._publish_ig_id = ig_id
-                logger.info("Instagram credentials: using FB token + discovered IG id %s", ig_id)
+                logger.info("Instagram credentials: FB Page token + IG Business ID %s", ig_id)
                 return self._publish_token, self._publish_ig_id
+
+        # Fallback: dedicated Instagram token + configured user ID
+        ig_token = await self._get_ig_token()
+        if ig_token and settings.instagram_user_id:
+            self._publish_token = ig_token
+            self._publish_ig_id = settings.instagram_user_id
+            logger.info("Instagram credentials: IG token + user_id %s", settings.instagram_user_id)
+            return self._publish_token, self._publish_ig_id
 
         logger.error("No valid Instagram credentials found")
         return None
@@ -115,7 +115,7 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
         if "error" in data:
             err = data["error"].get("message", str(data["error"]))
             logger.error("Instagram create media error: %s", err)
-            if self._publish_token and "does not exist" in err.lower():
+            if self._publish_token and ("does not exist" in err.lower() or "access token" in err.lower()):
                 logger.warning("Resetting cached IG credentials — will re-discover on next attempt")
                 self._publish_token = None
                 self._publish_ig_id = None
