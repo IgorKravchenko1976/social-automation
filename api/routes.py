@@ -14,8 +14,7 @@ from config.platforms import Platform
 from config.settings import settings
 from db.database import get_session
 from db.models import Post, Publication, PostStatus, Message, MessageDirection, RSSSource
-
-router = APIRouter(prefix="/api", tags=["admin"])
+from api.auth import require_admin, rate_limit_chat
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -106,9 +105,14 @@ class StatsOut(BaseModel):
     messages_unanswered: int
 
 
-# ── Blog (public) ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  PUBLIC router — no auth required
+# ══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/blog/posts", response_model=list[BlogPostOut])
+public_router = APIRouter(prefix="/api", tags=["public"])
+
+
+@public_router.get("/blog/posts", response_model=list[BlogPostOut])
 async def blog_posts(
     limit: int = Query(10, le=50),
     offset: int = 0,
@@ -166,7 +170,7 @@ async def blog_posts(
     return items
 
 
-@router.get("/media/{filename}")
+@public_router.get("/media/{filename}")
 async def serve_media(filename: str):
     """Serve images from media_cache so the website can display them."""
     safe_name = Path(filename).name
@@ -174,6 +178,37 @@ async def serve_media(filename: str):
     if not file_path.is_file():
         raise HTTPException(404, "File not found")
     return FileResponse(file_path, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@public_router.post("/chat", response_model=ChatResponse, dependencies=[Depends(rate_limit_chat)])
+async def web_chat(body: ChatRequest):
+    """Public chat endpoint for the website widget (rate-limited)."""
+    from content.generator import generate_auto_reply
+
+    try:
+        reply_text, category = await generate_auto_reply(
+            incoming_message=body.message,
+            platform=Platform.TELEGRAM,
+            sender_name=body.sender_name,
+        )
+        if category == "spam":
+            return ChatResponse(reply="Дякую за повідомлення!")
+        return ChatResponse(reply=reply_text)
+    except Exception:
+        return ChatResponse(
+            reply="Дякую за повідомлення! Наша команда скоро відповість. 🙏"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ADMIN router — requires X-API-Key header
+# ══════════════════════════════════════════════════════════════════════════════
+
+router = APIRouter(
+    prefix="/api",
+    tags=["admin"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 # ── Posts ─────────────────────────────────────────────────────────────────────
@@ -290,28 +325,6 @@ async def delete_rss_source(source_id: int, session: AsyncSession = Depends(get_
     await session.delete(source)
     await session.commit()
     return {"deleted": True}
-
-
-# ── Web Chat ──────────────────────────────────────────────────────────────────
-
-@router.post("/chat", response_model=ChatResponse)
-async def web_chat(body: ChatRequest):
-    """Public chat endpoint for the website widget."""
-    from content.generator import generate_auto_reply
-
-    try:
-        reply_text, category = await generate_auto_reply(
-            incoming_message=body.message,
-            platform=Platform.TELEGRAM,
-            sender_name=body.sender_name,
-        )
-        if category == "spam":
-            return ChatResponse(reply="Дякую за повідомлення!")
-        return ChatResponse(reply=reply_text)
-    except Exception:
-        return ChatResponse(
-            reply="Дякую за повідомлення! Наша команда скоро відповість. 🙏"
-        )
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────

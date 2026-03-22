@@ -14,7 +14,7 @@ import uvicorn
 from config.settings import settings
 from config.app_logger import setup_logging
 from db.database import init_db
-from api.routes import router as api_router
+from api.routes import router as admin_router, public_router
 from api.triggers import router as triggers_router
 
 log_file = setup_logging(data_dir=settings.data_dir, level=logging.INFO)
@@ -114,12 +114,18 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://www.im-in.net",
+        "https://im-in.net",
+        "http://localhost:3000",
+        "http://localhost:8080",
+    ],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
-app.include_router(api_router)
+app.include_router(public_router)
+app.include_router(admin_router)
 app.include_router(triggers_router)
 
 _static_dir = pathlib.Path(__file__).parent / "static"

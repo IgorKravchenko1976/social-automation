@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     webhook_base_url: str = "http://localhost:8000"
     webhook_secret: str = "change-me"
 
+    # Admin API key (required for all write/admin endpoints)
+    admin_api_key: str = ""
+
     # Persistent data directory (mount Railway Volume here)
     data_dir: str = "/data"
 

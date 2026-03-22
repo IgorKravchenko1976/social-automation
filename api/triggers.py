@@ -1,15 +1,20 @@
-"""Manual trigger, test, debug, and log endpoints."""
+"""Manual trigger, test, debug, and log endpoints — all require admin API key."""
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from config.settings import settings, get_today_start_utc, is_placeholder
 from config.platforms import FACEBOOK_GRAPH_API, INSTAGRAM_GRAPH_API
+from api.auth import require_admin
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["triggers"])
+router = APIRouter(
+    prefix="/api",
+    tags=["triggers"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 # ── Triggers ──────────────────────────────────────────────────────────────────
