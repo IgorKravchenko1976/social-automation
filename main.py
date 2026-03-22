@@ -62,6 +62,14 @@ def _setup_scheduler() -> None:
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 
+async def _safe(coro, label: str) -> None:
+    """Run a coroutine and log errors without crashing the whole startup."""
+    try:
+        await coro
+    except Exception:
+        logger.exception("Startup [%s] FAILED — continuing anyway", label)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
@@ -71,18 +79,18 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     from scheduler.jobs import ensure_daily_posts_exist, publish_missed_slots, expire_old_queued_publications
-    await expire_old_queued_publications()
-    await ensure_daily_posts_exist()
-    await publish_missed_slots()
+    await _safe(expire_old_queued_publications(), "expire_old_pubs")
+    await _safe(ensure_daily_posts_exist(), "ensure_posts")
+    await _safe(publish_missed_slots(), "publish_missed")
 
     from stats.token_renewer import seed_tokens_from_env
-    await seed_tokens_from_env()
+    await _safe(seed_tokens_from_env(), "seed_tokens")
 
     from platforms.telegram import start_telegram_bot, stop_telegram_bot
-    await start_telegram_bot()
+    await _safe(start_telegram_bot(), "telegram_bot")
 
     from scheduler.health_check import run_health_check
-    await run_health_check()
+    await _safe(run_health_check(), "health_check")
 
     logger.info("Social Media Automation is running! Schedule: %s (%s)",
                 settings.post_schedule, settings.timezone)
