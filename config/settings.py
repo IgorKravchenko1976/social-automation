@@ -90,3 +90,42 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# ── Shared date/time helpers (used throughout the project) ────────────────────
+
+def get_today_start_utc() -> "datetime":
+    """Return midnight of today (in project timezone) as a naive UTC datetime."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(settings.timezone)
+    now_local = datetime.now(tz)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return today_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def get_now_local() -> "datetime":
+    """Return the current time in project timezone."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo(settings.timezone))
+
+
+def parse_slot_time(time_str: str, now_local: "datetime") -> "datetime":
+    """Parse 'HH:MM' and return a datetime for that time today."""
+    hour, minute = map(int, time_str.split(":"))
+    return now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def is_placeholder(value: str) -> bool:
+    """Check if a credential value is empty or a placeholder."""
+    return not value or value.startswith("your-")
+
+
+def ensure_utc(dt: "datetime") -> "datetime":
+    """Ensure a datetime has UTC tzinfo (handles naive datetimes from SQLite)."""
+    from datetime import timezone
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt

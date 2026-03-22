@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import httpx
 
-from config.platforms import Platform
-from config.settings import settings
+from config.platforms import Platform, FACEBOOK_GRAPH_API, INSTAGRAM_GRAPH_API, EMPTY_STATS
+from config.settings import settings, get_now_local
 from db.database import async_session
 from db.models import DailyStats, Publication, PostStatus, Message, MessageDirection, ReactionSnapshot
 
@@ -52,7 +51,7 @@ async def _collect_reactions(platform: str, date_str: str) -> tuple[int, int]:
 
 async def _collect_telegram(date_str: str) -> dict:
     """Fetch Telegram channel stats via Bot API + DB."""
-    stats = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
+    stats = EMPTY_STATS.copy()
 
     client = await _http_client()
 
@@ -108,7 +107,7 @@ async def _collect_telegram(date_str: str) -> dict:
 
 async def _collect_facebook(date_str: str) -> dict:
     """Fetch Facebook Page stats via Graph API + DB."""
-    stats = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
+    stats = EMPTY_STATS.copy()
 
     if not settings.facebook_page_id or not settings.facebook_page_access_token:
         return stats
@@ -120,7 +119,7 @@ async def _collect_facebook(date_str: str) -> dict:
 
     try:
         resp = await client.get(
-            f"https://graph.facebook.com/v21.0/{settings.facebook_page_id}",
+            f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}",
             params={
                 "fields": "followers_count,fan_count",
                 "access_token": token,
@@ -153,7 +152,7 @@ async def _collect_facebook(date_str: str) -> dict:
 
 async def _collect_instagram(date_str: str) -> dict:
     """Fetch Instagram stats via Graph API + DB."""
-    stats = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
+    stats = EMPTY_STATS.copy()
 
     if not settings.instagram_user_id or not settings.instagram_access_token:
         return stats
@@ -165,7 +164,7 @@ async def _collect_instagram(date_str: str) -> dict:
 
     try:
         resp = await client.get(
-            f"https://graph.instagram.com/v21.0/{settings.instagram_user_id}",
+            f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
             params={
                 "fields": "followers_count,media_count",
                 "access_token": token,
@@ -198,7 +197,7 @@ async def _collect_instagram(date_str: str) -> dict:
 
 async def _collect_placeholder(platform: Platform, date_str: str) -> dict:
     """Placeholder for platforms without API credentials yet."""
-    stats = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
+    stats = EMPTY_STATS.copy()
 
     async with async_session() as session:
         result = await session.execute(
@@ -222,17 +221,23 @@ _COLLECTORS = {
 
 async def collect_all_stats() -> list[DailyStats]:
     """Collect today's stats for every platform and persist to DB."""
-    tz = ZoneInfo(settings.timezone)
-    date_str = datetime.now(tz).strftime("%Y-%m-%d")
+    date_str = get_now_local().strftime("%Y-%m-%d")
 
+    logger.info("=== STATS === Collecting stats for %s", date_str)
     rows: list[DailyStats] = []
+    errors: list[str] = []
 
     for platform in Platform:
         collector = _COLLECTORS.get(platform)
-        if collector:
-            data = await collector(date_str)
-        else:
-            data = await _collect_placeholder(platform, date_str)
+        try:
+            if collector:
+                data = await collector(date_str)
+            else:
+                data = await _collect_placeholder(platform, date_str)
+        except Exception:
+            logger.exception("=== STATS === FAILED to collect %s", platform.value)
+            errors.append(platform.value)
+            data = EMPTY_STATS.copy()
 
         row = DailyStats(
             date=date_str,
@@ -240,8 +245,13 @@ async def collect_all_stats() -> list[DailyStats]:
             **data,
         )
         rows.append(row)
-        logger.info("Stats %s %s: subs=%d posts=%d views=%d",
-                     date_str, platform.value, data["subscribers"], data["posts"], data["views"])
+        logger.info("=== STATS === %s %s: subs=%d posts=%d comments=%d views=%d likes=%d dislikes=%d",
+                     date_str, platform.value,
+                     data["subscribers"], data["posts"], data["comments"],
+                     data["views"], data["likes"], data["dislikes"])
+
+    if errors:
+        logger.error("=== STATS === Collection ERRORS on: %s", ", ".join(errors))
 
     async with async_session() as session:
         for r in rows:

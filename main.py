@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-import sys
+import pathlib
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -13,129 +12,80 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from config.settings import settings
+from config.app_logger import setup_logging
 from db.database import init_db
 from api.routes import router as api_router
+from api.triggers import router as triggers_router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+log_file = setup_logging(data_dir=settings.data_dir, level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info("Log file: %s (3-day rotation)", log_file)
 
 scheduler = AsyncIOScheduler(timezone=settings.timezone)
 
 
 def _setup_scheduler() -> None:
     from scheduler.jobs import create_daily_posts, publish_scheduled_post, retry_failed_publications
+    from scheduler.jobs import publish_missed_slots
+    from scheduler.health_check import run_health_check
     from messaging.monitor import poll_all_messages
     from messaging.responder import respond_to_pending_messages
     from stats.reporter import send_daily_report
+    from stats.token_renewer import renew_all_tokens
 
     tz = settings.timezone
-    logger.info("Scheduler timezone: %s", tz)
 
-    scheduler.add_job(
-        create_daily_posts,
-        CronTrigger(hour=8, minute=0, timezone=tz),
-        id="create_daily_posts",
-        replace_existing=True,
-    )
+    scheduler.add_job(create_daily_posts, CronTrigger(hour=8, minute=0, timezone=tz),
+                      id="create_daily_posts", replace_existing=True)
 
     for idx, time_str in enumerate(settings.post_schedule):
         hour, minute = map(int, time_str.split(":"))
-        scheduler.add_job(
-            publish_scheduled_post,
-            CronTrigger(hour=hour, minute=minute, timezone=tz),
-            args=[idx],
-            id=f"publish_slot_{idx}",
-            replace_existing=True,
-        )
-        logger.info("Publish slot %d scheduled at %s:%s %s", idx, time_str, "00", tz)
+        scheduler.add_job(publish_scheduled_post, CronTrigger(hour=hour, minute=minute, timezone=tz),
+                          args=[idx], id=f"publish_slot_{idx}", replace_existing=True)
+        logger.info("Publish slot %d → %s %s", idx, time_str, tz)
 
-    scheduler.add_job(
-        send_daily_report,
-        CronTrigger(hour=20, minute=0, timezone=tz),
-        id="daily_report",
-        replace_existing=True,
-    )
-    logger.info("Daily report scheduled at 20:00 %s → %s", tz, settings.report_email_to)
+    scheduler.add_job(send_daily_report, CronTrigger(hour=20, minute=0, timezone=tz),
+                      id="daily_report", replace_existing=True)
+    scheduler.add_job(renew_all_tokens, CronTrigger(hour=3, minute=0, timezone=tz),
+                      id="renew_tokens", replace_existing=True)
+    scheduler.add_job(poll_all_messages, "interval", minutes=5,
+                      id="poll_messages", replace_existing=True)
+    scheduler.add_job(respond_to_pending_messages, "interval", minutes=6,
+                      id="auto_reply", replace_existing=True)
+    scheduler.add_job(retry_failed_publications, "interval", hours=1,
+                      id="retry_failed", replace_existing=True)
+    scheduler.add_job(publish_missed_slots, "interval", minutes=15,
+                      id="catchup_missed_slots", replace_existing=True)
+    scheduler.add_job(run_health_check, "interval", minutes=30,
+                      id="health_check", replace_existing=True)
 
-    from stats.token_renewer import renew_all_tokens
-    scheduler.add_job(
-        renew_all_tokens,
-        CronTrigger(hour=3, minute=0, timezone=tz),
-        id="renew_tokens",
-        replace_existing=True,
-    )
-    logger.info("Token renewal check scheduled daily at 03:00 %s", tz)
-
-    # Poll messages every 5 minutes
-    scheduler.add_job(
-        poll_all_messages,
-        "interval",
-        minutes=5,
-        id="poll_messages",
-        replace_existing=True,
-    )
-
-    # Auto-reply every 6 minutes (offset from polling)
-    scheduler.add_job(
-        respond_to_pending_messages,
-        "interval",
-        minutes=6,
-        id="auto_reply",
-        replace_existing=True,
-    )
-
-    # Retry failed publications every hour
-    scheduler.add_job(
-        retry_failed_publications,
-        "interval",
-        hours=1,
-        id="retry_failed",
-        replace_existing=True,
-    )
-
-    # Catch-up: check for missed slots every 15 minutes
-    from scheduler.jobs import publish_missed_slots
-    scheduler.add_job(
-        publish_missed_slots,
-        "interval",
-        minutes=15,
-        id="catchup_missed_slots",
-        replace_existing=True,
-    )
-    logger.info("Catch-up job: checking missed slots every 15 min")
+    logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     await init_db()
-    logger.info("Starting scheduler...")
+
     _setup_scheduler()
     scheduler.start()
 
-    logger.info("Checking if today's posts exist...")
     from scheduler.jobs import ensure_daily_posts_exist, publish_missed_slots, expire_old_queued_publications
-
     await expire_old_queued_publications()
     await ensure_daily_posts_exist()
-
-    logger.info("Publishing any missed time slots...")
     await publish_missed_slots()
 
-    logger.info("Seeding tokens to DB...")
     from stats.token_renewer import seed_tokens_from_env
     await seed_tokens_from_env()
 
-    logger.info("Starting Telegram bot...")
     from platforms.telegram import start_telegram_bot, stop_telegram_bot
     await start_telegram_bot()
 
-    logger.info("Social Media Automation is running!")
-    logger.info("Post schedule: %s (%s)", settings.post_schedule, settings.timezone)
+    from scheduler.health_check import run_health_check
+    await run_health_check()
+
+    logger.info("Social Media Automation is running! Schedule: %s (%s)",
+                settings.post_schedule, settings.timezone)
     yield
 
     await stop_telegram_bot()
@@ -158,8 +108,8 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+app.include_router(triggers_router)
 
-import pathlib
 _static_dir = pathlib.Path(__file__).parent / "static"
 _static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
@@ -173,208 +123,6 @@ async def root():
         "post_schedule": settings.post_schedule,
         "timezone": settings.timezone,
     }
-
-
-@app.post("/api/trigger/create-posts")
-async def trigger_create_posts():
-    """Manually trigger daily post creation."""
-    from scheduler.jobs import create_daily_posts
-    await create_daily_posts()
-    return {"status": "ok", "message": "Daily posts created"}
-
-
-@app.post("/api/trigger/publish/{slot}")
-async def trigger_publish(slot: int):
-    """Manually trigger publishing for a time slot."""
-    from scheduler.jobs import publish_scheduled_post
-    try:
-        await publish_scheduled_post(slot)
-        return {"status": "ok", "message": f"Published slot {slot}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-@app.get("/api/debug/publications")
-async def debug_publications():
-    """Show today's publications status for debugging."""
-    from db.database import async_session
-    from db.models import Post, Publication
-    from sqlalchemy import select
-    from datetime import datetime, timezone as tz_mod
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo(settings.timezone)
-    now_local = datetime.now(tz)
-    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start_utc = today_start.astimezone(tz_mod.utc).replace(tzinfo=None)
-
-    async with async_session() as session:
-        result = await session.execute(
-            select(Post).where(Post.created_at >= today_start_utc).order_by(Post.created_at)
-        )
-        posts = result.scalars().all()
-
-        data = []
-        for p in posts:
-            pub_result = await session.execute(
-                select(Publication).where(Publication.post_id == p.id)
-            )
-            pubs = pub_result.scalars().all()
-            data.append({
-                "post_id": p.id,
-                "title": (p.title or "")[:60],
-                "created": str(p.created_at),
-                "publications": [
-                    {"platform": pub.platform, "status": pub.status, "error": pub.error_message, "retries": pub.retry_count}
-                    for pub in pubs
-                ],
-            })
-    return data
-
-
-@app.post("/api/trigger/poll-messages")
-async def trigger_poll():
-    """Manually trigger message polling."""
-    from messaging.monitor import poll_all_messages
-    messages = await poll_all_messages()
-    return {"status": "ok", "new_messages": len(messages)}
-
-
-@app.post("/api/trigger/auto-reply")
-async def trigger_auto_reply():
-    """Manually trigger auto-replies."""
-    from messaging.responder import respond_to_pending_messages
-    count = await respond_to_pending_messages()
-    return {"status": "ok", "replied": count}
-
-
-@app.get("/api/test/facebook")
-async def test_facebook():
-    """Test Facebook connection and token validity."""
-    import httpx
-    try:
-        token = settings.facebook_page_access_token
-        page_id = settings.facebook_page_id
-        if not token or token.startswith("your-"):
-            return {"status": "error", "error": "FACEBOOK_PAGE_ACCESS_TOKEN not configured"}
-        if not page_id or page_id.startswith("your-"):
-            return {"status": "error", "error": "FACEBOOK_PAGE_ID not configured"}
-
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"https://graph.facebook.com/v21.0/debug_token",
-                params={"input_token": token, "access_token": token},
-            )
-            debug_data = r.json().get("data", {})
-
-            r2 = await client.get(
-                f"https://graph.facebook.com/v21.0/{page_id}",
-                params={"fields": "name,id,followers_count", "access_token": token},
-            )
-            page_data = r2.json()
-
-        return {
-            "status": "ok",
-            "page_id": page_id,
-            "page_info": page_data,
-            "token_type": debug_data.get("type", "unknown"),
-            "token_scopes": debug_data.get("scopes", []),
-            "token_valid": debug_data.get("is_valid", False),
-            "token_expires": debug_data.get("expires_at"),
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-
-@app.post("/api/test/facebook-post")
-async def test_facebook_post():
-    """Publish a test post to Facebook page."""
-    from platforms.facebook import FacebookPlatform
-    fb = FacebookPlatform()
-    result = await fb.publish_text("👋 Тестовий пост від I'M IN — автоматизація працює! 🚀\n\nСлідкуйте за новинами додатку для мандрівників.\n🌍 www.im-in.net")
-    return {"status": "ok" if result.success else "error", "post_id": result.platform_post_id, "error": result.error}
-
-
-@app.get("/api/test/instagram-business-id")
-async def get_instagram_business_id():
-    """Look up the Instagram Business Account ID linked to the Facebook Page."""
-    import httpx
-    from stats.token_renewer import get_active_token
-    token = await get_active_token("facebook") or settings.facebook_page_access_token
-    page_id = settings.facebook_page_id
-    if not token or not page_id:
-        return {"status": "error", "error": "Facebook not configured"}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"https://graph.facebook.com/v21.0/{page_id}",
-                params={"fields": "instagram_business_account,name", "access_token": token},
-            )
-            return r.json()
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-
-@app.get("/api/test/instagram")
-async def test_instagram():
-    """Test Instagram connection and token validity."""
-    import httpx
-    try:
-        token = settings.instagram_access_token
-        user_id = settings.instagram_user_id
-        if not token:
-            return {"status": "error", "error": "INSTAGRAM_ACCESS_TOKEN not configured"}
-        if not user_id:
-            return {"status": "error", "error": "INSTAGRAM_USER_ID not configured"}
-
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"https://graph.instagram.com/v21.0/{user_id}",
-                params={"fields": "id,username,followers_count,media_count", "access_token": token},
-            )
-            data = r.json()
-
-        if "error" in data:
-            return {"status": "error", "error": data["error"].get("message")}
-
-        return {
-            "status": "ok",
-            "user_id": user_id,
-            "username": data.get("username"),
-            "followers": data.get("followers_count"),
-            "media_count": data.get("media_count"),
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-
-@app.post("/api/trigger/renew-tokens")
-async def trigger_renew_tokens():
-    """Manually trigger token renewal."""
-    try:
-        from stats.token_renewer import renew_all_tokens
-        results = await renew_all_tokens()
-        return {"status": "ok", "results": results}
-    except Exception as e:
-        logger.exception("Token renewal failed")
-        return {"status": "error", "error": str(e)}
-
-
-@app.post("/api/trigger/daily-report")
-async def trigger_daily_report():
-    """Manually trigger the daily report email."""
-    try:
-        from stats.reporter import send_daily_report
-        await send_daily_report()
-        return {"status": "ok", "message": f"Report sent to {settings.report_email_to}"}
-    except Exception as e:
-        logger.exception("Daily report failed")
-        return {
-            "status": "error",
-            "error": str(e),
-            "debug_to": settings.report_email_to,
-            "debug_resend_key_set": bool(settings.resend_api_key),
-        }
 
 
 if __name__ == "__main__":

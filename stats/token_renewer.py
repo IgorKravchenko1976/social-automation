@@ -6,14 +6,14 @@ from datetime import datetime, timezone, timedelta
 
 import httpx
 
-from config.settings import settings
+from config.settings import settings, ensure_utc, is_placeholder
+from config.platforms import FACEBOOK_GRAPH_API as GRAPH_API, INSTAGRAM_GRAPH_API
 from db.database import async_session
 from db.models import TokenStore
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
-GRAPH_API = "https://graph.facebook.com/v21.0"
 RENEW_THRESHOLD_DAYS = 7
 
 
@@ -27,7 +27,7 @@ async def get_active_token(platform: str) -> str | None:
         if row and row.token:
             if row.expires_at is None:
                 return row.token
-            exp = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            exp = ensure_utc(row.expires_at)
             if exp > datetime.now(timezone.utc):
                 return row.token
     return None
@@ -66,7 +66,7 @@ async def _renew_facebook() -> bool:
     current_token = await get_active_token("facebook")
     if not current_token:
         current_token = settings.facebook_page_access_token
-    if not current_token or current_token.startswith("your-"):
+    if is_placeholder(current_token):
         logger.warning("No valid Facebook token to renew")
         return False
 
@@ -161,7 +161,7 @@ async def _renew_instagram() -> bool:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
-                "https://graph.instagram.com/refresh_access_token",
+                f"{INSTAGRAM_GRAPH_API}/refresh_access_token",
                 params={
                     "grant_type": "ig_refresh_token",
                     "access_token": current_token,
@@ -216,7 +216,7 @@ async def seed_tokens_from_env() -> None:
     """On first startup, save env tokens to DB so renewal can work."""
     # Facebook
     fb_token = settings.facebook_page_access_token
-    if fb_token and not fb_token.startswith("your-"):
+    if not is_placeholder(fb_token):
         existing = await get_active_token("facebook")
         if not existing:
             try:

@@ -11,6 +11,68 @@ class Platform(str, Enum):
     TIKTOK = "tiktok"
 
 
+def configured_platforms() -> list[Platform]:
+    """Return only platforms that have credentials configured."""
+    from config.settings import settings
+
+    configured = []
+    if settings.telegram_bot_token and settings.telegram_channel_id:
+        configured.append(Platform.TELEGRAM)
+    if settings.facebook_page_id and settings.facebook_page_access_token:
+        configured.append(Platform.FACEBOOK)
+    if settings.instagram_user_id and settings.instagram_access_token:
+        configured.append(Platform.INSTAGRAM)
+    if settings.twitter_bearer_token and settings.twitter_api_key:
+        configured.append(Platform.TWITTER)
+    if settings.tiktok_access_token:
+        configured.append(Platform.TIKTOK)
+    return configured
+
+
+def get_platform_instance(platform: Platform):
+    """Create a platform adapter instance."""
+    from platforms.telegram import TelegramPlatform
+    from platforms.facebook import FacebookPlatform
+    from platforms.twitter import TwitterPlatform
+    from platforms.instagram import InstagramPlatform
+    from platforms.tiktok import TikTokPlatform
+
+    _registry = {
+        Platform.TELEGRAM: TelegramPlatform,
+        Platform.FACEBOOK: FacebookPlatform,
+        Platform.TWITTER: TwitterPlatform,
+        Platform.INSTAGRAM: InstagramPlatform,
+        Platform.TIKTOK: TikTokPlatform,
+    }
+    return _registry[platform]()
+
+
+FACEBOOK_GRAPH_API = "https://graph.facebook.com/v21.0"
+INSTAGRAM_GRAPH_API = "https://graph.instagram.com/v21.0"
+
+PLATFORM_LABELS = {
+    "telegram": "Telegram",
+    "facebook": "Facebook",
+    "twitter": "X / Twitter",
+    "instagram": "Instagram",
+    "tiktok": "TikTok",
+}
+
+PLATFORM_COLORS = {
+    "telegram": "#2AABEE",
+    "facebook": "#1877F2",
+    "twitter": "#E7E9EA",
+    "instagram": "#E4405F",
+    "tiktok": "#00F2EA",
+}
+
+PLATFORM_ICONS = {
+    "telegram": "TG", "facebook": "FB", "instagram": "IG",
+    "twitter": "X", "tiktok": "TT",
+}
+
+EMPTY_STATS = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
+
 PLATFORM_LIMITS = {
     Platform.TELEGRAM: {
         "max_text_length": 4096,

@@ -7,31 +7,16 @@ from typing import Optional
 import httpx
 
 from config.settings import settings
-from config.platforms import Platform
-from platforms.base import BasePlatform, PublishResult
+from config.platforms import Platform, INSTAGRAM_GRAPH_API as GRAPH_API
+from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin
 
 logger = logging.getLogger(__name__)
 
-GRAPH_API = "https://graph.instagram.com/v21.0"
 
-
-class InstagramPlatform(BasePlatform):
+class InstagramPlatform(TokenPlatformMixin, BasePlatform):
     platform = Platform.INSTAGRAM
-    _cached_token: str | None = None
-
-    async def _get_token(self) -> str:
-        from stats.token_renewer import get_active_token
-        db_token = await get_active_token("instagram")
-        if db_token:
-            return db_token
-        return settings.instagram_access_token
-
-    @property
-    def _token(self) -> str:
-        return self._cached_token or settings.instagram_access_token
-
-    async def _ensure_token(self) -> None:
-        self._cached_token = await self._get_token()
+    _platform_name = "instagram"
+    _env_token_attr = "instagram_access_token"
 
     @property
     def _user_id(self) -> str:

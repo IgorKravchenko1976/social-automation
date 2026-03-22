@@ -1,70 +1,33 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+import random
+from datetime import datetime, timezone
 from typing import Optional
-from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update, func as sa_func
+from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.platforms import Platform, PLATFORM_LIMITS
-from config.settings import settings
+from config.platforms import Platform, configured_platforms, get_platform_instance
+from config.settings import settings, get_today_start_utc, get_now_local, parse_slot_time
 from content.generator import generate_post_text
 from content.product_knowledge import FEATURE_TOPICS
 from content.tourism_topics import TOURISM_RSS_FEEDS, ACTIVE_SPORTS_PLACES, LEISURE_TRAVEL_PLACES, BANNED_RSS_KEYWORDS
 from content.media import get_image_for_post, create_slideshow_video
-from content.rss_parser import parse_all_sources, fetch_feed
+from content.rss_parser import fetch_feed
 from db.database import async_session
 from db.models import Post, Publication, PostStatus, KVStore
 
 logger = logging.getLogger(__name__)
 
-def _configured_platforms() -> list[Platform]:
-    """Return only platforms that have credentials configured."""
-    configured = []
-    if settings.telegram_bot_token and settings.telegram_channel_id:
-        configured.append(Platform.TELEGRAM)
-    if settings.facebook_page_id and settings.facebook_page_access_token:
-        configured.append(Platform.FACEBOOK)
-    if settings.instagram_user_id and settings.instagram_access_token:
-        configured.append(Platform.INSTAGRAM)
-    if settings.twitter_bearer_token and settings.twitter_api_key:
-        configured.append(Platform.TWITTER)
-    if settings.tiktok_access_token:
-        configured.append(Platform.TIKTOK)
-    return configured
-
-
-ALL_PLATFORMS = _configured_platforms()
+ALL_PLATFORMS = configured_platforms()
 
 MAX_RETRIES = 3
 
 
-def get_platform_instance(platform: Platform):
-    from platforms.telegram import TelegramPlatform
-    from platforms.facebook import FacebookPlatform
-    from platforms.twitter import TwitterPlatform
-    from platforms.instagram import InstagramPlatform
-    from platforms.tiktok import TikTokPlatform
-
-    _registry = {
-        Platform.TELEGRAM: TelegramPlatform,
-        Platform.FACEBOOK: FacebookPlatform,
-        Platform.TWITTER: TwitterPlatform,
-        Platform.INSTAGRAM: InstagramPlatform,
-        Platform.TIKTOK: TikTokPlatform,
-    }
-    return _registry[platform]()
-
-
 async def ensure_daily_posts_exist() -> None:
     """Create today's posts if insufficient for the schedule (called at startup)."""
-    tz = ZoneInfo(settings.timezone)
-    now_local = datetime.now(tz)
-    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
-
+    today_start_utc = get_today_start_utc()
     expected = len(settings.post_schedule)
 
     async with async_session() as session:
@@ -105,10 +68,8 @@ async def publish_missed_slots() -> None:
     For each past time slot today, checks if the corresponding post still has
     queued publications, and publishes if so.
     """
-    tz = ZoneInfo(settings.timezone)
-    now_local = datetime.now(tz)
-    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+    now_local = get_now_local()
+    today_start_utc = get_today_start_utc()
 
     async with async_session() as session:
         today_posts_result = await session.execute(
@@ -119,8 +80,7 @@ async def publish_missed_slots() -> None:
         today_posts = today_posts_result.scalars().all()
 
     for idx, time_str in enumerate(settings.post_schedule):
-        hour, minute = map(int, time_str.split(":"))
-        slot_time = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        slot_time = parse_slot_time(time_str, now_local)
 
         if now_local <= slot_time:
             continue
@@ -186,7 +146,6 @@ async def _fetch_tourism_news(session, count: int = 2) -> list[dict]:
     existing_urls = {row[0] for row in existing_urls_result.all() if row[0]}
 
     all_entries: list[dict] = []
-    import random
     feeds = list(TOURISM_RSS_FEEDS)
     random.shuffle(feeds)
 
@@ -220,11 +179,18 @@ async def create_daily_posts() -> None:
     - 1 leisure travel place
     Order: news, active, news, feature, leisure
     """
+    logger.info("=== CREATE POSTS === Starting daily post creation for %d platforms: %s",
+                len(ALL_PLATFORMS), [p.value for p in ALL_PLATFORMS])
+    if not ALL_PLATFORMS:
+        logger.error("=== CREATE POSTS === NO platforms configured! Check API keys in .env")
+        return
+
     async with async_session() as session:
         created_posts: list[tuple[Post, str]] = []
 
         # --- 2 Tourism news from RSS ---
         news_entries = await _fetch_tourism_news(session, count=2)
+        logger.info("=== CREATE POSTS === RSS entries found: %d", len(news_entries))
         for entry in news_entries:
             source_name = entry.get("source_name", "")
             content = (
@@ -245,7 +211,6 @@ async def create_daily_posts() -> None:
             created_posts.append((post, "tourism_news"))
 
         while len([p for p in created_posts if p[1] == "tourism_news"]) < 2:
-            import random
             topic = f"Актуальна туристична новина: цікавий тренд або подія у світі подорожей (#{random.randint(1000, 9999)})"
             post = Post(title=topic[:200], content_raw=topic, source="ai")
             session.add(post)
@@ -283,10 +248,16 @@ async def create_daily_posts() -> None:
 
         await session.commit()
         logger.info(
-            "Created %d posts: %s",
+            "=== CREATE POSTS === Done: %d posts created [%s] for %d platform(s)",
             len(created_posts),
             ", ".join(ct for _, ct in created_posts),
+            len(ALL_PLATFORMS),
         )
+        if len(created_posts) < len(settings.post_schedule):
+            logger.warning(
+                "=== CREATE POSTS === Only %d/%d posts created — some slots may be empty!",
+                len(created_posts), len(settings.post_schedule),
+            )
 
 
 async def publish_scheduled_post(time_slot: int) -> None:
@@ -295,10 +266,7 @@ async def publish_scheduled_post(time_slot: int) -> None:
     Only considers today's posts that still have QUEUED publications.
     Picks the Nth queued post (by creation time) for the given slot index.
     """
-    tz = ZoneInfo(settings.timezone)
-    now_local = datetime.now(tz)
-    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+    today_start_utc = get_today_start_utc()
 
     async with async_session() as session:
         queued_posts_result = await session.execute(
@@ -314,12 +282,12 @@ async def publish_scheduled_post(time_slot: int) -> None:
         queued_posts = queued_posts_result.scalars().all()
 
         if not queued_posts:
-            logger.warning("No queued posts for time slot %d", time_slot)
+            logger.warning("=== PUBLISH === No queued posts for slot %d — all may be published or none created", time_slot)
             return
 
         post = queued_posts[0]
         logger.info(
-            "Slot %d: publishing post_id=%d '%s' (%d queued posts remaining)",
+            "=== PUBLISH === Slot %d: post_id=%d '%s' (%d queued remaining)",
             time_slot, post.id, (post.title or "")[:50], len(queued_posts),
         )
 
@@ -424,15 +392,19 @@ async def _publish_single(
             pub.status = PostStatus.PUBLISHED
             pub.platform_post_id = result.platform_post_id
             pub.published_at = datetime.now(timezone.utc)
-            logger.info("Published to %s: post_id=%s", platform.value, result.platform_post_id)
+            logger.info("=== PUBLISH === OK %s post_id=%d platform_post_id=%s",
+                        platform.value, post.id, result.platform_post_id)
         else:
             pub.retry_count += 1
             if pub.retry_count >= MAX_RETRIES:
                 pub.status = PostStatus.FAILED
+                logger.error("=== PUBLISH === FINAL FAIL %s post_id=%d after %d retries: %s",
+                             platform.value, post.id, pub.retry_count, result.error)
             else:
                 pub.status = PostStatus.QUEUED
+                logger.warning("=== PUBLISH === RETRY %s post_id=%d attempt=%d/%d: %s",
+                               platform.value, post.id, pub.retry_count, MAX_RETRIES, result.error)
             pub.error_message = result.error
-            logger.error("Failed to publish to %s: %s", platform.value, result.error)
 
     except Exception as e:
         pub.retry_count += 1
@@ -441,15 +413,13 @@ async def _publish_single(
         else:
             pub.status = PostStatus.QUEUED
         pub.error_message = str(e)
-        logger.exception("Exception publishing to %s", platform.value)
+        logger.exception("=== PUBLISH === EXCEPTION %s post_id=%d attempt=%d: %s",
+                         platform.value, post.id, pub.retry_count, str(e)[:200])
 
 
 async def expire_old_queued_publications() -> None:
     """Mark queued publications from previous days as failed so they don't block today's posts."""
-    tz = ZoneInfo(settings.timezone)
-    now_local = datetime.now(tz)
-    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+    today_start_utc = get_today_start_utc()
 
     async with async_session() as session:
         result = await session.execute(

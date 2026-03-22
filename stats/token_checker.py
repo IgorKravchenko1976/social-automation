@@ -8,7 +8,8 @@ from typing import Optional
 
 import httpx
 
-from config.settings import settings
+from config.settings import settings, is_placeholder, ensure_utc
+from config.platforms import FACEBOOK_GRAPH_API, INSTAGRAM_GRAPH_API
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ async def check_all_tokens() -> list[TokenStatus]:
 
 async def _check_telegram() -> TokenStatus:
     token = settings.telegram_bot_token
-    if not token or token.startswith("your-"):
+    if is_placeholder(token):
         return TokenStatus("Telegram", configured=False, valid=False)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -55,12 +56,12 @@ async def _check_facebook() -> TokenStatus:
     from stats.token_renewer import get_active_token
     db_token = await get_active_token("facebook")
     token = db_token or settings.facebook_page_access_token
-    if not token or token.startswith("your-"):
+    if is_placeholder(token):
         return TokenStatus("Facebook", configured=False, valid=False)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
-                "https://graph.facebook.com/v21.0/debug_token",
+                f"{FACEBOOK_GRAPH_API}/debug_token",
                 params={"input_token": token, "access_token": token},
             )
             data = r.json().get("data", {})
@@ -74,18 +75,14 @@ async def _check_facebook() -> TokenStatus:
                 days_remaining = (expires_at - datetime.now(timezone.utc)).days
 
             return TokenStatus(
-                "Facebook",
-                configured=True,
-                valid=is_valid,
-                expires_at=expires_at,
-                days_remaining=days_remaining,
+                "Facebook", configured=True, valid=is_valid,
+                expires_at=expires_at, days_remaining=days_remaining,
             )
     except Exception as e:
         return TokenStatus("Facebook", configured=True, valid=False, error=str(e))
 
 
 async def _check_instagram() -> TokenStatus:
-    from datetime import timedelta
     from stats.token_renewer import get_active_token
     from db.database import async_session
     from db.models import TokenStore
@@ -98,7 +95,7 @@ async def _check_instagram() -> TokenStatus:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
-                f"https://graph.instagram.com/v21.0/{settings.instagram_user_id}",
+                f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
                 params={"access_token": token, "fields": "id,username"},
             )
             data = r.json()
@@ -114,7 +111,7 @@ async def _check_instagram() -> TokenStatus:
             )
             row = result.scalar_one_or_none()
             if row and row.expires_at:
-                exp = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+                exp = ensure_utc(row.expires_at)
                 expires_at = exp
                 days_remaining = (exp - datetime.now(timezone.utc)).days
 
@@ -125,6 +122,6 @@ async def _check_instagram() -> TokenStatus:
 
 
 def _check_simple(name: str, credential: str) -> TokenStatus:
-    if not credential or credential.startswith("your-"):
+    if is_placeholder(credential):
         return TokenStatus(name, configured=False, valid=False)
     return TokenStatus(name, configured=True, valid=True)

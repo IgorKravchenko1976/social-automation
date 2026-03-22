@@ -5,10 +5,9 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.platforms import Platform
+from config.platforms import Platform, get_platform_instance
 from db.database import async_session
 from db.models import Message, MessageDirection
-from scheduler.jobs import get_platform_instance
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +17,7 @@ MONITORED_PLATFORMS = [Platform.TELEGRAM, Platform.FACEBOOK, Platform.TWITTER, P
 async def poll_all_messages() -> list[Message]:
     """Poll all platforms for new messages and store them in the DB."""
     new_messages = []
+    poll_errors: list[str] = []
 
     async with async_session() as session:
         for platform in MONITORED_PLATFORMS:
@@ -25,6 +25,7 @@ async def poll_all_messages() -> list[Message]:
                 adapter = get_platform_instance(platform)
                 raw_messages = await adapter.get_new_messages()
 
+                new_count = 0
                 for raw in raw_messages:
                     exists = await _message_exists(
                         session, platform.value, raw["platform_message_id"]
@@ -43,12 +44,19 @@ async def poll_all_messages() -> list[Message]:
                     )
                     session.add(msg)
                     new_messages.append(msg)
+                    new_count += 1
 
-                logger.info("Fetched %d new messages from %s", len(raw_messages), platform.value)
+                if new_count > 0:
+                    logger.info("=== POLL === %s: %d new messages stored", platform.value, new_count)
             except Exception:
-                logger.exception("Error polling %s", platform.value)
+                poll_errors.append(platform.value)
+                logger.exception("=== POLL === FAILED to poll %s", platform.value)
 
         await session.commit()
+
+    if poll_errors:
+        logger.error("=== POLL === Errors on platforms: %s", ", ".join(poll_errors))
+    logger.info("=== POLL === Total new messages: %d", len(new_messages))
 
     return new_messages
 

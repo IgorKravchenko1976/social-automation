@@ -6,32 +6,16 @@ from typing import Optional
 import httpx
 
 from config.settings import settings
-from config.platforms import Platform
-from platforms.base import BasePlatform, PublishResult
+from config.platforms import Platform, FACEBOOK_GRAPH_API as GRAPH_API_BASE
+from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin
 
 logger = logging.getLogger(__name__)
 
-GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
 
-
-class FacebookPlatform(BasePlatform):
+class FacebookPlatform(TokenPlatformMixin, BasePlatform):
     platform = Platform.FACEBOOK
-    _cached_token: str | None = None
-
-    async def _get_token(self) -> str:
-        """Return the best available token: DB (auto-renewed) → env fallback."""
-        from stats.token_renewer import get_active_token
-        db_token = await get_active_token("facebook")
-        if db_token:
-            return db_token
-        return settings.facebook_page_access_token
-
-    @property
-    def _token(self) -> str:
-        return self._cached_token or settings.facebook_page_access_token
-
-    async def _ensure_token(self) -> None:
-        self._cached_token = await self._get_token()
+    _platform_name = "facebook"
+    _env_token_attr = "facebook_page_access_token"
 
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
         try:

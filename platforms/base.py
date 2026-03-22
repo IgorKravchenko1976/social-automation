@@ -35,3 +35,26 @@ class BasePlatform(abc.ABC):
 
     async def send_reply(self, platform_message_id: str, text: str) -> bool:
         return False
+
+
+class TokenPlatformMixin:
+    """Shared token caching for platforms using get_active_token (Facebook, Instagram)."""
+    _cached_token: str | None = None
+    _platform_name: str = ""
+    _env_token_attr: str = ""
+
+    async def _get_token(self) -> str:
+        from stats.token_renewer import get_active_token
+        from config.settings import settings
+        db_token = await get_active_token(self._platform_name)
+        if db_token:
+            return db_token
+        return getattr(settings, self._env_token_attr, "")
+
+    @property
+    def _token(self) -> str:
+        from config.settings import settings
+        return self._cached_token or getattr(settings, self._env_token_attr, "")
+
+    async def _ensure_token(self) -> None:
+        self._cached_token = await self._get_token()

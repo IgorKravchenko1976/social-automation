@@ -5,11 +5,10 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.platforms import Platform
+from config.platforms import Platform, get_platform_instance
 from content.generator import generate_auto_reply
 from db.database import async_session
 from db.models import Message, MessageDirection
-from scheduler.jobs import get_platform_instance
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +16,7 @@ logger = logging.getLogger(__name__)
 async def respond_to_pending_messages() -> int:
     """Process all unresponded incoming messages, generate AI replies, and send them."""
     replied_count = 0
+    fail_count = 0
 
     async with async_session() as session:
         result = await session.execute(
@@ -27,6 +27,9 @@ async def respond_to_pending_messages() -> int:
             )
         )
         messages = result.scalars().all()
+
+        if messages:
+            logger.info("=== REPLY === Processing %d pending messages", len(messages))
 
         for msg in messages:
             try:
@@ -72,14 +75,20 @@ async def respond_to_pending_messages() -> int:
                     session.add(outgoing)
                     msg.replied = True
                     replied_count += 1
-                    logger.info("Replied to message %s on %s", msg.id, msg.platform)
+                    logger.info("=== REPLY === OK msg_id=%s %s [%s]", msg.id, msg.platform, category)
                 else:
-                    logger.warning("Failed to send reply for message %s", msg.id)
+                    fail_count += 1
+                    logger.warning("=== REPLY === SEND FAILED msg_id=%s %s", msg.id, msg.platform)
 
             except Exception:
-                logger.exception("Error replying to message %s", msg.id)
+                fail_count += 1
+                logger.exception("=== REPLY === ERROR msg_id=%s %s", msg.id, msg.platform)
 
         await session.commit()
+
+    if messages:
+        logger.info("=== REPLY === Done: %d replied, %d failed, %d still pending",
+                     replied_count, fail_count, len(messages) - replied_count - fail_count)
 
     return replied_count
 
