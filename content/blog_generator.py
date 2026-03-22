@@ -248,8 +248,8 @@ def generate_post_html(
         .post-header a:hover {{ color: #fff; }}
         .post-header img {{ height: 32px; border-radius: 6px; }}
         .post-hero {{
-            width: 100px; height: 100px; object-fit: cover;
-            border-radius: 12px; margin: 2rem 0 1.5rem;
+            width: 100px; height: 50px; object-fit: cover;
+            border-radius: 8px; margin: 2rem 0 1.5rem;
             float: left; margin-right: 1.25rem; margin-bottom: 0.5rem;
         }}
         .post-date {{
