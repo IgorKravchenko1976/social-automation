@@ -13,6 +13,7 @@ from config.settings import settings, get_today_start_utc, get_now_local, parse_
 from content.generator import (
     generate_post_text, generate_unique_topic,
     extract_location_coordinates, build_map_link,
+    translate_post,
 )
 from content.tourism_topics import (
     TOURISM_RSS_FEEDS, BANNED_RSS_KEYWORDS,
@@ -302,6 +303,17 @@ async def create_daily_posts() -> None:
         for post_obj, _ in created_posts:
             await _enrich_post_with_geo(post_obj)
 
+        for post_obj, _ in created_posts:
+            try:
+                import json as _json
+                tr = await translate_post(
+                    post_obj.title or "", post_obj.content_raw or "",
+                )
+                if tr:
+                    post_obj.translations = _json.dumps(tr, ensure_ascii=False)
+            except Exception:
+                logger.warning("Translation failed for post_id=%s", post_obj.id)
+
         await session.commit()
         logger.info(
             "=== CREATE POSTS === Done: %d posts created [%s] for %d platform(s)",
@@ -367,7 +379,8 @@ async def publish_scheduled_post(time_slot: int) -> None:
         await session.commit()
 
         try:
-            from content.blog_generator import generate_post_html, save_thumbnail
+            import json as _json
+            from content.blog_generator import generate_post_html, save_thumbnail, _parse_translations
             _thumb_url = None
             if post.image_path:
                 _thumb_url = save_thumbnail(post.id, post.image_path)
@@ -381,6 +394,7 @@ async def publish_scheduled_post(time_slot: int) -> None:
                 image_url=_thumb_url, source_url=post.source_url,
                 latitude=post.latitude, longitude=post.longitude,
                 place_name=post.place_name,
+                translations=_parse_translations(post.translations),
             )
         except Exception:
             logger.warning("Blog page generation failed for post_id=%d", post.id, exc_info=True)

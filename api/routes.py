@@ -91,6 +91,7 @@ class BlogPostOut(BaseModel):
     image_url: Optional[str]
     published_at: Optional[datetime]
     created_at: Optional[datetime]
+    translations: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 
@@ -152,6 +153,13 @@ async def blog_posts(
         if post.image_path:
             fname = Path(post.image_path).name
             image_url = f"{base_url}/api/media/{fname}"
+        import json as _json
+        tr = {}
+        if post.translations:
+            try:
+                tr = _json.loads(post.translations)
+            except Exception:
+                pass
         items.append(
             BlogPostOut(
                 id=post.id,
@@ -165,6 +173,7 @@ async def blog_posts(
                 image_url=image_url,
                 published_at=published_at,
                 created_at=post.created_at,
+                translations=tr or None,
             )
         )
     return items

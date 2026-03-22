@@ -72,6 +72,16 @@ def _thumb_url_if_exists(post_id: int) -> Optional[str]:
     return None
 
 
+def _parse_translations(raw: Optional[str]) -> dict:
+    """Parse JSON translations field, returning empty dict on failure."""
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
 def _map_url(lat: float, lon: float, name: str = "") -> str:
     from urllib.parse import quote
     q = quote(name) if name else f"{lat},{lon}"
@@ -109,6 +119,7 @@ def generate_post_html(
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     place_name: Optional[str] = None,
+    translations: Optional[dict] = None,
 ) -> Path:
     """Generate a static HTML page for a single post. Returns the file path."""
 
@@ -160,6 +171,10 @@ def generate_post_html(
         if img_src.startswith("blog/"):
             img_src = img_src[len("blog/"):]
         image_html = f'<img class="post-hero" src="{escape(img_src)}" alt="{safe_title}" loading="lazy" onerror="this.style.display=\'none\'">'
+
+    translations_json = json.dumps(translations or {}, ensure_ascii=False)
+    title_json = json.dumps(title or "", ensure_ascii=False)
+    content_json = json.dumps(content or "", ensure_ascii=False)
 
     html = f"""<!DOCTYPE html>
 <html lang="uk">
@@ -268,6 +283,16 @@ def generate_post_html(
         }}
         .post-footer a {{ color: rgba(255,255,255,0.6); text-decoration: none; }}
         .post-footer a:hover {{ color: #fff; }}
+        .post-lang-bar {{
+            background: var(--primary-light); padding: 0.5rem 0; text-align: center;
+        }}
+        .post-lang-bar button {{
+            background: none; border: 1px solid transparent; padding: 0.25rem 0.6rem;
+            border-radius: 50px; cursor: pointer; font-size: 0.75rem; font-weight: 600;
+            color: var(--text-muted); transition: all 0.2s; font-family: inherit;
+        }}
+        .post-lang-bar button.active {{ background: var(--primary); color: #fff; }}
+        .post-lang-bar button:hover:not(.active) {{ border-color: var(--primary); color: var(--primary); }}
         @media (max-width: 768px) {{
             .post-title {{ font-size: 1.35rem; }}
             .post-hero {{ border-radius: 12px; max-height: 280px; }}
@@ -278,18 +303,27 @@ def generate_post_html(
     <header class="post-header">
         <div class="container">
             <a href="../index.html"><img src="../logo-imin.png" alt="I'M IN"></a>
-            <a href="../blog.html">
+            <a href="../blog.html" id="back-link">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-                Всі новини
+                <span id="back-text">Всі новини</span>
             </a>
         </div>
     </header>
+    <div class="post-lang-bar">
+        <button data-lang-btn="uk" class="active">UK</button>
+        <button data-lang-btn="en">EN</button>
+        <button data-lang-btn="fr">FR</button>
+        <button data-lang-btn="es">ES</button>
+        <button data-lang-btn="de">DE</button>
+        <button data-lang-btn="it">IT</button>
+        <button data-lang-btn="el">EL</button>
+    </div>
     <main>
         <div class="container">
             {image_html}
             <div class="post-date">{date_human}</div>
-            <h1 class="post-title">{safe_title}</h1>
-            <div class="post-body">
+            <h1 class="post-title" id="post-title">{safe_title}</h1>
+            <div class="post-body" id="post-body">
                 {content_paragraphs}
             </div>
             <div class="post-meta">
@@ -303,6 +337,25 @@ def generate_post_html(
             <p>&copy; 2026 I'M IN. <a href="../index.html">im-in.net</a></p>
         </div>
     </footer>
+    <script>
+    (function() {{
+        var T = {translations_json};
+        T["uk"] = {{"title": {title_json}, "content": {content_json}}};
+        var backLabels = {{"uk":"Всі новини","en":"All news","fr":"Toutes les nouvelles","es":"Todas las noticias","de":"Alle Nachrichten","it":"Tutte le notizie","el":"Όλα τα νέα"}};
+        var lang = localStorage.getItem('language') || 'uk';
+        function setLang(l) {{
+            lang = l; localStorage.setItem('language', l);
+            document.querySelectorAll('[data-lang-btn]').forEach(function(b) {{ b.classList.toggle('active', b.getAttribute('data-lang-btn') === l); }});
+            var t = T[l] || T['uk'];
+            document.getElementById('post-title').textContent = t.title;
+            var body = document.getElementById('post-body');
+            body.innerHTML = t.content.split('\\n').filter(function(p){{ return p.trim(); }}).map(function(p){{ var s=document.createElement('span'); s.textContent=p; return '<p>'+s.innerHTML+'</p>'; }}).join('');
+            document.getElementById('back-text').textContent = backLabels[l] || backLabels['uk'];
+        }}
+        document.querySelectorAll('[data-lang-btn]').forEach(function(btn) {{ btn.addEventListener('click', function() {{ setLang(btn.getAttribute('data-lang-btn')); }}); }});
+        setLang(lang);
+    }})();
+    </script>
 </body>
 </html>"""
 
@@ -353,6 +406,7 @@ async def generate_all_published() -> list[Path]:
 
     for post, published_at in rows:
         image_url = _thumb_url_if_exists(post.id)
+        translations = _parse_translations(post.translations)
 
         page = generate_post_html(
             post_id=post.id,
@@ -364,6 +418,7 @@ async def generate_all_published() -> list[Path]:
             latitude=post.latitude,
             longitude=post.longitude,
             place_name=post.place_name,
+            translations=translations,
         )
         generated.append(page)
 
@@ -379,6 +434,7 @@ async def generate_all_published() -> list[Path]:
             "image_url": image_url,
             "published_at": published_at,
             "created_at": post.created_at,
+            "translations": translations,
         })
 
     idx_path = generate_posts_index(index_entries)

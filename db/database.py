@@ -38,6 +38,7 @@ async def _run_migrations(conn) -> None:
         ("posts", "latitude", "FLOAT"),
         ("posts", "longitude", "FLOAT"),
         ("posts", "place_name", "VARCHAR(500)"),
+        ("posts", "translations", "TEXT"),
         ("messages", "thread_id", "VARCHAR(500)"),
     ]
     for table, col, col_type in _alters:
