@@ -40,6 +40,7 @@ class Post(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     place_name = Column(String(500), nullable=True)
+    source_published_at = Column(DateTime, nullable=True)  # date the original source published the article
     translations = Column(Text, nullable=True)  # JSON: {"en": {"title":"...","content":"..."}, ...}
     scheduled_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())

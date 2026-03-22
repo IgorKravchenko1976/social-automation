@@ -173,10 +173,16 @@ async def _find_post_context(session: AsyncSession, msg: Message) -> str:
         post = result.scalar_one_or_none()
         if post:
             parts = []
+            if post.source_published_at:
+                parts.append(f"Дата джерела: {post.source_published_at.strftime('%d.%m.%Y')}")
+            elif post.source == "ai":
+                parts.append("Тип поста: авторський (без зовнішнього джерела, без конкретної дати)")
             if post.title:
                 parts.append(post.title)
             if post.content_raw:
                 parts.append(post.content_raw[:1000])
+            if post.source_url:
+                parts.append(f"Посилання на джерело: {post.source_url}")
             return "\n".join(parts)
     except Exception:
         logger.warning("Could not find post context for msg_id=%s", msg.id)

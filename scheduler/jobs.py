@@ -244,6 +244,7 @@ async def create_daily_posts() -> None:
                 content_raw=content,
                 source="rss",
                 source_url=entry["link"],
+                source_published_at=pub_date,
             )
             session.add(post)
             await session.flush()
