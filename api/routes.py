@@ -260,6 +260,81 @@ async def public_fb_poll_test():
     return report
 
 
+@public_router.get("/debug/fb-reply-check")
+async def public_fb_reply_check():
+    """Check if bot replies actually exist on Facebook comments."""
+    import httpx
+    from stats.token_renewer import get_active_token
+    from config.platforms import FACEBOOK_GRAPH_API
+
+    fb_token = await get_active_token("facebook") or settings.facebook_page_access_token
+    page_id = settings.facebook_page_id
+
+    results = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{page_id}/feed",
+                params={
+                    "access_token": fb_token,
+                    "fields": "id,message,comments{id,from,message,comments{id,from,message}}",
+                    "limit": 5,
+                },
+            )
+            data = resp.json()
+            if "error" in data:
+                return {"error": data["error"]}
+
+            for post in data.get("data", []):
+                post_info = {
+                    "post_id": post.get("id"),
+                    "post_text": (post.get("message") or "")[:60],
+                    "comments": [],
+                }
+                for comment in post.get("comments", {}).get("data", []):
+                    c_info = {
+                        "id": comment.get("id"),
+                        "from": comment.get("from"),
+                        "message": comment.get("message", ""),
+                        "replies": [],
+                    }
+                    for reply in comment.get("comments", {}).get("data", []):
+                        c_info["replies"].append({
+                            "id": reply.get("id"),
+                            "from": reply.get("from"),
+                            "message": reply.get("message", ""),
+                        })
+                    post_info["comments"].append(c_info)
+                results.append(post_info)
+
+            test_comment_id = None
+            for p in results:
+                for c in p["comments"]:
+                    if c["message"] and not c["replies"]:
+                        test_comment_id = c["id"]
+                        break
+                if test_comment_id:
+                    break
+
+            test_result = None
+            if test_comment_id:
+                test_resp = await client.post(
+                    f"{FACEBOOK_GRAPH_API}/{test_comment_id}/comments",
+                    params={"access_token": fb_token},
+                    json={"message": "Дякуємо за ваш коментар! Слідкуйте за оновленнями 🌍"},
+                )
+                test_result = {
+                    "comment_id": test_comment_id,
+                    "response": test_resp.json(),
+                    "status_code": test_resp.status_code,
+                }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    return {"posts": results, "test_reply": test_result}
+
+
 @public_router.get("/debug/test-ig-reply")
 async def public_test_ig_reply():
     """Temporary: try replying to the newest unreplied Instagram comment and return raw API response."""
