@@ -484,6 +484,13 @@ async def publish_scheduled_post(time_slot: int) -> None:
 
         await _cleanup_post_media(session, post)
 
+        try:
+            from scheduler.blog_sync import sync_blog_to_vps
+            synced = await sync_blog_to_vps()
+            logger.info("Auto blog-sync after publish: %d files pushed", synced)
+        except Exception:
+            logger.warning("Auto blog-sync failed after post %d", post.id, exc_info=True)
+
 
 async def _cleanup_post_media(session: AsyncSession, post: Post) -> None:
     """Delete local media files once no queued publications remain for the post."""

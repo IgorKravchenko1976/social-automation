@@ -179,6 +179,19 @@ def generate_post_html(
     title_for_json = json.dumps(title or "Новина", ensure_ascii=False)
     desc_for_json = json.dumps((content or "")[:160].replace("\n", " "), ensure_ascii=False)
 
+    hreflang_tags = f'    <link rel="alternate" hreflang="uk" href="{canonical}">\n'
+    tr = translations or {}
+    for lang_code in ["en", "fr", "es", "de", "it", "el"]:
+        if lang_code in tr:
+            hreflang_tags += f'    <link rel="alternate" hreflang="{lang_code}" href="{canonical}">\n'
+    hreflang_tags += f'    <link rel="alternate" hreflang="x-default" href="{canonical}">'
+
+    og_locale_alts = ""
+    locale_map = {"en": "en_US", "fr": "fr_FR", "es": "es_ES", "de": "de_DE", "it": "it_IT", "el": "el_GR"}
+    for lc, loc in locale_map.items():
+        if lc in tr:
+            og_locale_alts += f'\n    <meta property="og:locale:alternate" content="{loc}">'
+
     geo_json = ""
     if latitude and longitude:
         geo_json = f""",
@@ -207,14 +220,16 @@ def generate_post_html(
     <meta property="og:image" content="{escape(og_image)}">
     <meta property="og:image:alt" content="{safe_title}">
     <meta property="og:site_name" content="I'M IN">
-    <meta property="og:locale" content="uk_UA">
+    <meta property="og:locale" content="uk_UA">{og_locale_alts}
     <meta property="article:published_time" content="{date_iso}">
+    <meta property="article:section" content="Travel">
     <meta property="article:publisher" content="https://www.im-in.net">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="{safe_title}">
     <meta name="twitter:description" content="{description}">
     <meta name="twitter:image" content="{escape(og_image)}">
     <meta name="twitter:image:alt" content="{safe_title}">
+{hreflang_tags}
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -379,6 +394,12 @@ def generate_post_html(
     </main>
     <footer class="post-footer">
         <div class="container">
+            <nav aria-label="Footer" style="margin-bottom:0.75rem;">
+                <a href="../index.html">I'M IN</a> &middot;
+                <a href="../blog.html">Блог</a> &middot;
+                <a href="../terms.html">Угода</a> &middot;
+                <a href="../privacy.html">Конфіденційність</a>
+            </nav>
             <p>&copy; 2026 I'M IN. <a href="../index.html">im-in.net</a></p>
         </div>
     </footer>
@@ -390,6 +411,7 @@ def generate_post_html(
         var lang = localStorage.getItem('language') || 'uk';
         function setLang(l) {{
             lang = l; localStorage.setItem('language', l);
+            document.documentElement.lang = l;
             document.querySelectorAll('[data-lang-btn]').forEach(function(b) {{ b.classList.toggle('active', b.getAttribute('data-lang-btn') === l); }});
             var t = T[l] || T['uk'];
             document.getElementById('post-title').textContent = t.title;
