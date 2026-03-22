@@ -196,6 +196,25 @@ async def public_comment_check():
     return report
 
 
+@public_router.get("/debug/test-geo")
+async def public_test_geo():
+    """Test geo extraction on known locations."""
+    from content.generator import extract_location_coordinates
+    tests = [
+        "Драгобрат, Карпати — найвищий гірськолижний курорт України",
+        "Львів — місто кави та шоколаду",
+        "Італія послаблює правила в'їзду",
+    ]
+    results = []
+    for topic in tests:
+        try:
+            geo = await extract_location_coordinates(topic)
+            results.append({"topic": topic[:60], "geo": geo, "error": None})
+        except Exception as e:
+            results.append({"topic": topic[:60], "geo": None, "error": str(e)})
+    return results
+
+
 @public_router.get("/debug/fb-poll-test")
 async def public_fb_poll_test():
     """Temporary: directly poll Facebook comments and show what the API returns + DB status."""
