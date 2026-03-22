@@ -96,6 +96,7 @@ async def respond_to_pending_messages() -> int:
                         platform=platform,
                         sender_name=msg.sender_name or "",
                         post_context=post_context,
+                        prior_replies=prior_replies,
                     )
 
                 msg.category = category
