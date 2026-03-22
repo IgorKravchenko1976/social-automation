@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.platforms import Platform, get_platform_instance
@@ -11,6 +11,30 @@ from db.database import async_session
 from db.models import Message, MessageDirection, Publication, Post
 
 logger = logging.getLogger(__name__)
+
+MAX_REPLIES_PER_AUTHOR = 4
+FAREWELL_MESSAGE = (
+    "Дякуємо за спілкування! 🙌\n"
+    "Слідкуйте за нашими оновленнями:\n"
+    "🌍 Сайт: www.im-in.net\n"
+    "📱 Telegram: @iminapp_bot\n"
+    "Якщо залишились питання — напишіть нам на сайті!"
+)
+
+
+async def count_replies_to_sender(
+    session: AsyncSession, platform: str, sender_id: str,
+) -> int:
+    """Count how many times we've already replied to this sender on this platform."""
+    result = await session.execute(
+        select(sa_func.count(Message.id)).where(
+            Message.platform == platform,
+            Message.sender_id == sender_id,
+            Message.direction == MessageDirection.INCOMING,
+            Message.replied == True,
+        )
+    )
+    return result.scalar() or 0
 
 
 async def respond_to_pending_messages() -> int:
@@ -37,14 +61,29 @@ async def respond_to_pending_messages() -> int:
                     msg.replied = True
                     continue
 
-                platform = Platform(msg.platform)
-                post_context = await _find_post_context(session, msg)
-                reply_text, category = await generate_auto_reply(
-                    incoming_message=msg.text,
-                    platform=platform,
-                    sender_name=msg.sender_name or "",
-                    post_context=post_context,
+                prior_replies = await count_replies_to_sender(
+                    session, msg.platform, msg.sender_id or "",
                 )
+
+                if prior_replies > MAX_REPLIES_PER_AUTHOR:
+                    msg.replied = True
+                    logger.info("Reply limit exceeded for sender=%s (%d), skipping",
+                                msg.sender_id, prior_replies)
+                    continue
+
+                platform = Platform(msg.platform)
+
+                if prior_replies == MAX_REPLIES_PER_AUTHOR:
+                    reply_text = FAREWELL_MESSAGE
+                    category = "farewell"
+                else:
+                    post_context = await _find_post_context(session, msg)
+                    reply_text, category = await generate_auto_reply(
+                        incoming_message=msg.text,
+                        platform=platform,
+                        sender_name=msg.sender_name or "",
+                        post_context=post_context,
+                    )
 
                 msg.category = category
 

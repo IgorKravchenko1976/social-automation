@@ -12,6 +12,7 @@ from config.platforms import Platform
 from config.emoji_classification import classify_emoji
 from db.database import async_session
 from db.models import Message as MsgModel, MessageDirection, ReactionSnapshot
+from messaging.responder import count_replies_to_sender, MAX_REPLIES_PER_AUTHOR, FAREWELL_MESSAGE
 from platforms.telegram_api import api_url, ensure_client, request as tg_request
 
 logger = logging.getLogger(__name__)
@@ -78,12 +79,14 @@ async def _process_message(message: dict) -> None:
 
     post_context = _extract_post_context(message) if is_group_comment else ""
 
+    sender_id = str(from_user.get("id", ""))
+
     try:
         async with async_session() as session:
             session.add(MsgModel(
                 platform="telegram",
                 platform_message_id=str(message_id),
-                sender_id=str(from_user.get("id", "")),
+                sender_id=sender_id,
                 sender_name=sender_name,
                 direction=MessageDirection.INCOMING,
                 text=text,
@@ -95,12 +98,33 @@ async def _process_message(message: dict) -> None:
         logger.exception("Failed to save Telegram message to DB")
 
     try:
-        from content.generator import generate_auto_reply
+        async with async_session() as session:
+            prior_replies = await count_replies_to_sender(session, "telegram", sender_id)
 
-        reply_text, category = await generate_auto_reply(
-            incoming_message=text, platform=Platform.TELEGRAM,
-            sender_name=sender_name, post_context=post_context,
-        )
+        if prior_replies > MAX_REPLIES_PER_AUTHOR:
+            logger.info("Reply limit exceeded for sender=%s (%d), not replying", sender_id, prior_replies)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(MsgModel).where(
+                        MsgModel.platform == "telegram",
+                        MsgModel.platform_message_id == str(message_id),
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if row:
+                    row.replied = True
+                    await session.commit()
+            return
+
+        if prior_replies == MAX_REPLIES_PER_AUTHOR:
+            reply_text = FAREWELL_MESSAGE
+            category = "farewell"
+        else:
+            from content.generator import generate_auto_reply
+            reply_text, category = await generate_auto_reply(
+                incoming_message=text, platform=Platform.TELEGRAM,
+                sender_name=sender_name, post_context=post_context,
+            )
 
         if category == "spam":
             return
@@ -115,6 +139,15 @@ async def _process_message(message: dict) -> None:
                     direction=MessageDirection.OUTGOING,
                     text=reply_text, category=category, replied=True,
                 ))
+                result = await session.execute(
+                    select(MsgModel).where(
+                        MsgModel.platform == "telegram",
+                        MsgModel.platform_message_id == str(message_id),
+                    )
+                )
+                incoming_row = result.scalar_one_or_none()
+                if incoming_row:
+                    incoming_row.replied = True
                 await session.commit()
         except Exception:
             logger.exception("Failed to save outgoing message to DB")
