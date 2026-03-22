@@ -196,6 +196,71 @@ async def public_comment_check():
     return report
 
 
+@public_router.get("/debug/test-ig-reply")
+async def public_test_ig_reply():
+    """Temporary: try replying to the newest unreplied Instagram comment and return raw API response."""
+    import httpx
+    from db.database import async_session as _async_session
+    from db.models import Message, MessageDirection
+    from sqlalchemy import select, desc
+    from stats.token_renewer import get_active_token
+    from config.platforms import FACEBOOK_GRAPH_API
+
+    async with _async_session() as session:
+        result = await session.execute(
+            select(Message).where(
+                Message.platform == "instagram",
+                Message.direction == MessageDirection.INCOMING,
+                Message.replied == False,
+            ).order_by(desc(Message.created_at)).limit(1)
+        )
+        msg = result.scalar_one_or_none()
+
+    if not msg:
+        return {"error": "No unreplied Instagram comments in DB"}
+
+    fb_token = await get_active_token("facebook") or settings.facebook_page_access_token
+    if not fb_token:
+        return {"error": "No Facebook token"}
+
+    page_id = settings.facebook_page_id
+
+    report = {
+        "msg_id": msg.id,
+        "platform_message_id": msg.platform_message_id,
+        "sender": msg.sender_name,
+        "text": msg.text,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            ig_r = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{page_id}",
+                params={"access_token": fb_token, "fields": "instagram_business_account"},
+            )
+            ig_id = ig_r.json().get("instagram_business_account", {}).get("id")
+            report["ig_business_id"] = ig_id
+
+            comment_check = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{msg.platform_message_id}",
+                params={"access_token": fb_token, "fields": "id,text,from,timestamp"},
+            )
+            report["comment_lookup"] = comment_check.json()
+
+            reply_text = "Дякуємо за коментар! Слідкуйте за оновленнями 🌍"
+            resp = await client.post(
+                f"{FACEBOOK_GRAPH_API}/{msg.platform_message_id}/replies",
+                params={"access_token": fb_token},
+                data={"message": reply_text},
+            )
+            report["reply_response"] = resp.json()
+            report["reply_status_code"] = resp.status_code
+    except Exception as e:
+        report["exception"] = str(e)
+
+    return report
+
+
 @public_router.get("/debug/messages-status")
 async def public_messages_status():
     """Temporary: check messages in DB and their reply status."""
