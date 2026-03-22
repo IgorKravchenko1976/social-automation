@@ -4,7 +4,7 @@ import datetime as dt
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, Boolean, Enum, ForeignKey,
+    Column, Integer, String, Text, DateTime, Boolean, Enum, Float, ForeignKey,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -37,6 +37,9 @@ class Post(Base):
     source_url = Column(String(2000), nullable=True)
     image_path = Column(String(1000), nullable=True)
     video_path = Column(String(1000), nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    place_name = Column(String(500), nullable=True)
     scheduled_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 

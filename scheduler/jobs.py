@@ -8,9 +8,12 @@ from typing import Optional
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.platforms import Platform, configured_platforms, get_platform_instance
+from config.platforms import Platform, PLATFORM_LIMITS, configured_platforms, get_platform_instance
 from config.settings import settings, get_today_start_utc, get_now_local, parse_slot_time
-from content.generator import generate_post_text, generate_unique_topic
+from content.generator import (
+    generate_post_text, generate_unique_topic,
+    extract_location_coordinates, build_map_link,
+)
 from content.tourism_topics import (
     TOURISM_RSS_FEEDS, BANNED_RSS_KEYWORDS,
     ACTIVE_DIRECTIONS, LEISURE_DIRECTIONS, FEATURE_DIRECTIONS,
@@ -151,6 +154,18 @@ async def _pick_feature_topic(
     return topic
 
 
+async def _enrich_post_with_geo(post: Post) -> None:
+    """Extract geo coordinates from the post topic and store on the Post object."""
+    try:
+        geo = await extract_location_coordinates(post.title or post.content_raw[:300])
+        if geo:
+            post.latitude = geo["lat"]
+            post.longitude = geo["lon"]
+            post.place_name = (geo.get("name") or "")[:500]
+    except Exception:
+        logger.warning("Geo extraction failed for post_id=%s", post.id)
+
+
 def _is_banned(title: str, summary: str) -> bool:
     """Check if an RSS entry contains banned political/military keywords."""
     text = (title + " " + summary).lower()
@@ -283,6 +298,9 @@ async def create_daily_posts() -> None:
             session.add(Publication(post_id=post.id, platform=platform.value))
         created_posts.append((post, "feature"))
         recent_titles.append(feature_topic)
+
+        for post_obj, _ in created_posts:
+            await _enrich_post_with_geo(post_obj)
 
         await session.commit()
         logger.info(
@@ -426,6 +444,11 @@ async def _publish_single(
                     topic=post.content_raw, platform=platform,
                     content_type=content_type,
                 )
+
+            limits = PLATFORM_LIMITS.get(platform, {})
+            if limits.get("supports_links") and post.latitude and post.longitude:
+                map_url = build_map_link(post.latitude, post.longitude, post.place_name or "")
+                pub.content_adapted += f"\n\n📍 {post.place_name or 'На карті'}: {map_url}"
 
         adapter = get_platform_instance(platform)
 

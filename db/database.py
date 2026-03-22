@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from config.settings import settings
@@ -29,6 +29,20 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_add_geo_columns(conn)
+
+
+async def _migrate_add_geo_columns(conn) -> None:
+    """Add latitude/longitude/place_name columns to posts table if missing."""
+    for col, col_type in [
+        ("latitude", "FLOAT"),
+        ("longitude", "FLOAT"),
+        ("place_name", "VARCHAR(500)"),
+    ]:
+        try:
+            await conn.execute(text(f"ALTER TABLE posts ADD COLUMN {col} {col_type}"))
+        except Exception:
+            pass
 
 
 async def get_session() -> AsyncSession:
