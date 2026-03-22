@@ -442,6 +442,23 @@ async def publish_scheduled_post(time_slot: int) -> None:
             platform = Platform(pub.platform)
             await _publish_single(session, post, pub, platform, image_path)
 
+        best_text = next(
+            (p.content_adapted for p in publications
+             if p.content_adapted and p.platform == Platform.TELEGRAM.value),
+            None,
+        ) or next(
+            (p.content_adapted for p in publications if p.content_adapted), None,
+        )
+        if best_text and len(best_text) > len(post.content_raw or ""):
+            post.content_raw = best_text
+            if post.translations:
+                try:
+                    tr = await translate_post(post.title or "", best_text)
+                    if tr:
+                        post.translations = __import__("json").dumps(tr, ensure_ascii=False)
+                except Exception:
+                    logger.warning("Re-translation failed for post %d", post.id, exc_info=True)
+
         await session.commit()
 
         try:

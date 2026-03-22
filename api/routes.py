@@ -246,6 +246,54 @@ async def public_fix_geo():
     return {"total_without_geo": len(posts), "fixed": len([f for f in fixed if "place" in f]), "details": fixed}
 
 
+@public_router.get("/debug/regenerate-content")
+async def public_regenerate_content():
+    """Re-generate full text for posts that only have short topic in content_raw."""
+    from db.database import async_session as _async_session
+    from db.models import Post, Publication, PostStatus
+    from content.generator import generate_post_text, translate_post
+    from config.platforms import Platform
+    from sqlalchemy import select
+    import json as _json
+
+    updated = []
+    async with _async_session() as session:
+        result = await session.execute(
+            select(Post).where(Post.title.isnot(None)).order_by(Post.id.desc())
+        )
+        posts = result.scalars().all()
+
+        for post in posts:
+            raw = post.content_raw or ""
+            if len(raw) > 500:
+                continue
+
+            try:
+                if post.source == "rss":
+                    full_text = await generate_post_text(
+                        topic="", platform=Platform.TELEGRAM,
+                        source_text=raw, content_type="tourism_news",
+                    )
+                else:
+                    ct = "feature" if "i'm in" in raw.lower() or "карт" in raw.lower() else "leisure_travel"
+                    full_text = await generate_post_text(
+                        topic=raw, platform=Platform.TELEGRAM, content_type=ct,
+                    )
+
+                if full_text and len(full_text) > len(raw):
+                    post.content_raw = full_text
+                    tr = await translate_post(post.title or "", full_text)
+                    if tr:
+                        post.translations = _json.dumps(tr, ensure_ascii=False)
+                    updated.append({"id": post.id, "title": (post.title or "")[:60], "len": len(full_text)})
+            except Exception as e:
+                updated.append({"id": post.id, "title": (post.title or "")[:60], "error": str(e)})
+
+        await session.commit()
+
+    return {"checked": len(posts), "updated": len([u for u in updated if "len" in u]), "details": updated}
+
+
 @public_router.get("/debug/fb-poll-test")
 async def public_fb_poll_test():
     """Temporary: directly poll Facebook comments and show what the API returns + DB status."""
