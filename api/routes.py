@@ -215,6 +215,37 @@ async def public_test_geo():
     return results
 
 
+@public_router.get("/debug/fix-geo")
+async def public_fix_geo():
+    """Re-enrich all posts that have no geo data."""
+    from db.database import async_session as _async_session
+    from db.models import Post
+    from content.generator import extract_location_coordinates
+    from sqlalchemy import select
+
+    fixed = []
+    async with _async_session() as session:
+        result = await session.execute(
+            select(Post).where(Post.latitude.is_(None), Post.title.isnot(None))
+        )
+        posts = result.scalars().all()
+
+        for post in posts:
+            try:
+                geo = await extract_location_coordinates(post.title or post.content_raw[:300])
+                if geo and geo.get("lat") and geo.get("lon"):
+                    post.latitude = geo["lat"]
+                    post.longitude = geo["lon"]
+                    post.place_name = (geo.get("name") or "")[:500]
+                    fixed.append({"id": post.id, "title": (post.title or "")[:40], "place": post.place_name})
+            except Exception as e:
+                fixed.append({"id": post.id, "title": (post.title or "")[:40], "error": str(e)})
+
+        await session.commit()
+
+    return {"total_without_geo": len(posts), "fixed": len([f for f in fixed if "place" in f]), "details": fixed}
+
+
 @public_router.get("/debug/fb-poll-test")
 async def public_fb_poll_test():
     """Temporary: directly poll Facebook comments and show what the API returns + DB status."""
