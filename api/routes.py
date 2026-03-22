@@ -196,6 +196,37 @@ async def public_comment_check():
     return report
 
 
+@public_router.get("/debug/messages-status")
+async def public_messages_status():
+    """Temporary: check messages in DB and their reply status."""
+    from db.database import async_session
+    from db.models import Message, MessageDirection
+    from sqlalchemy import select, desc
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Message)
+            .order_by(desc(Message.created_at))
+            .limit(20)
+        )
+        msgs = result.scalars().all()
+
+    return [
+        {
+            "id": m.id,
+            "platform": m.platform,
+            "direction": m.direction.value if m.direction else None,
+            "sender": m.sender_name,
+            "text": (m.text or "")[:80],
+            "replied": m.replied,
+            "category": m.category,
+            "thread_id": m.thread_id,
+            "created_at": str(m.created_at),
+        }
+        for m in msgs
+    ]
+
+
 @public_router.get("/blog/posts", response_model=list[BlogPostOut])
 async def blog_posts(
     limit: int = Query(10, le=50),
