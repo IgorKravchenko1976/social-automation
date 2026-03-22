@@ -176,6 +176,18 @@ def generate_post_html(
     title_json = json.dumps(title or "", ensure_ascii=False)
     content_json = json.dumps(content or "", ensure_ascii=False)
 
+    title_for_json = json.dumps(title or "Новина", ensure_ascii=False)
+    desc_for_json = json.dumps((content or "")[:160].replace("\n", " "), ensure_ascii=False)
+
+    geo_json = ""
+    if latitude and longitude:
+        geo_json = f""",
+        "contentLocation": {{
+            "@type": "Place",
+            "name": {json.dumps(place_name or "", ensure_ascii=False)},
+            "geo": {{"@type": "GeoCoordinates", "latitude": {latitude}, "longitude": {longitude}}}
+        }}"""
+
     html = f"""<!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -183,6 +195,8 @@ def generate_post_html(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{safe_title} — I'M IN Blog</title>
     <meta name="description" content="{description}">
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+    <meta name="theme-color" content="#7C3AED">
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
     <link rel="icon" type="image/png" sizes="128x128" href="../favicon.png">
     <link rel="canonical" href="{canonical}">
@@ -191,12 +205,16 @@ def generate_post_html(
     <meta property="og:title" content="{safe_title}">
     <meta property="og:description" content="{description}">
     <meta property="og:image" content="{escape(og_image)}">
+    <meta property="og:image:alt" content="{safe_title}">
     <meta property="og:site_name" content="I'M IN">
+    <meta property="og:locale" content="uk_UA">
     <meta property="article:published_time" content="{date_iso}">
+    <meta property="article:publisher" content="https://www.im-in.net">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="{safe_title}">
     <meta name="twitter:description" content="{description}">
     <meta name="twitter:image" content="{escape(og_image)}">
+    <meta name="twitter:image:alt" content="{safe_title}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -204,16 +222,41 @@ def generate_post_html(
     {{
         "@context": "https://schema.org",
         "@type": "BlogPosting",
-        "headline": "{safe_title}",
-        "description": "{description}",
+        "@id": "{canonical}",
+        "mainEntityOfPage": "{canonical}",
+        "headline": {title_for_json},
+        "description": {desc_for_json},
         "datePublished": "{date_iso}",
+        "dateModified": "{date_iso}",
         "image": "{escape(og_image)}",
         "url": "{canonical}",
+        "inLanguage": "uk",
+        "author": {{
+            "@type": "Organization",
+            "@id": "{SITE_URL}/#organization",
+            "name": "I'M IN"
+        }},
         "publisher": {{
             "@type": "Organization",
+            "@id": "{SITE_URL}/#organization",
             "name": "I'M IN",
-            "url": "{SITE_URL}"
-        }}
+            "url": "{SITE_URL}",
+            "logo": {{
+                "@type": "ImageObject",
+                "url": "{SITE_URL}/logo-imin.png"
+            }}
+        }}{geo_json}
+    }}
+    </script>
+    <script type="application/ld+json">
+    {{
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {{"@type": "ListItem", "position": 1, "name": "Головна", "item": "{SITE_URL}/"}},
+            {{"@type": "ListItem", "position": 2, "name": "Блог", "item": "{SITE_URL}/blog.html"}},
+            {{"@type": "ListItem", "position": 3, "name": {title_for_json}, "item": "{canonical}"}}
+        ]
     }}
     </script>
     <style>
@@ -302,14 +345,16 @@ def generate_post_html(
 <body>
     <header class="post-header">
         <div class="container">
-            <a href="../index.html"><img src="../logo-imin.png" alt="I'M IN"></a>
-            <a href="../blog.html" id="back-link">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-                <span id="back-text">Всі новини</span>
-            </a>
+            <a href="../index.html"><img src="../logo-imin.png" alt="I'M IN" width="120" height="44"></a>
+            <nav aria-label="Навігація">
+                <a href="../blog.html" id="back-link">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                    <span id="back-text">Всі новини</span>
+                </a>
+            </nav>
         </div>
     </header>
-    <div class="post-lang-bar">
+    <div class="post-lang-bar" role="navigation" aria-label="Language">
         <button data-lang-btn="uk" class="active">UK</button>
         <button data-lang-btn="en">EN</button>
         <button data-lang-btn="fr">FR</button>
@@ -319,18 +364,18 @@ def generate_post_html(
         <button data-lang-btn="el">EL</button>
     </div>
     <main>
-        <div class="container">
+        <article class="container" itemscope itemtype="https://schema.org/BlogPosting">
             {image_html}
-            <div class="post-date">{date_human}</div>
-            <h1 class="post-title" id="post-title">{safe_title}</h1>
-            <div class="post-body" id="post-body">
+            <time class="post-date" datetime="{date_iso}" itemprop="datePublished">{date_human}</time>
+            <h1 class="post-title" id="post-title" itemprop="headline">{safe_title}</h1>
+            <div class="post-body" id="post-body" itemprop="articleBody">
                 {content_paragraphs}
             </div>
             <div class="post-meta">
                 {geo_html}
                 {source_html}
             </div>
-        </div>
+        </article>
     </main>
     <footer class="post-footer">
         <div class="container">
@@ -440,5 +485,42 @@ async def generate_all_published() -> list[Path]:
     idx_path = generate_posts_index(index_entries)
     generated.append(idx_path)
 
-    logger.info("Blog generation complete: %d pages + index", len(rows))
+    sitemap_path = _generate_sitemap(index_entries)
+    if sitemap_path:
+        generated.append(sitemap_path)
+
+    logger.info("Blog generation complete: %d pages + index + sitemap", len(rows))
     return generated
+
+
+def _generate_sitemap(entries: list[dict]) -> Optional[Path]:
+    """Generate sitemap.xml with all pages including blog posts."""
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        lines = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+            f'  <url><loc>{SITE_URL}/</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>',
+            f'  <url><loc>{SITE_URL}/blog.html</loc><lastmod>{today}</lastmod><changefreq>daily</changefreq><priority>0.9</priority></url>',
+            f'  <url><loc>{SITE_URL}/terms.html</loc><lastmod>2026-03-08</lastmod><changefreq>monthly</changefreq><priority>0.3</priority></url>',
+            f'  <url><loc>{SITE_URL}/privacy.html</loc><lastmod>2026-03-08</lastmod><changefreq>monthly</changefreq><priority>0.3</priority></url>',
+        ]
+        for e in entries:
+            pub = e.get("published_at")
+            if pub:
+                if isinstance(pub, str):
+                    d = pub[:10]
+                else:
+                    d = pub.strftime("%Y-%m-%d")
+            else:
+                d = today
+            lines.append(f'  <url><loc>{SITE_URL}/blog/post-{e["id"]}.html</loc><lastmod>{d}</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>')
+        lines.append('</urlset>')
+
+        sitemap_path = _blog_dir() / "sitemap.xml"
+        sitemap_path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("Generated sitemap.xml with %d URLs", len(entries) + 4)
+        return sitemap_path
+    except Exception:
+        logger.warning("Failed to generate sitemap", exc_info=True)
+        return None

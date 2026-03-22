@@ -28,12 +28,20 @@ async def sync_blog_to_vps() -> int:
     thumbs = list(blog_dir.glob("thumb-*.jpg"))
     all_files = list(set(generated + thumbs))
 
+    sitemap_file = blog_dir / "sitemap.xml"
+    sitemap_to_root = sitemap_file if sitemap_file.is_file() else None
+
     has_creds = settings.vps_ssh_host and (settings.vps_ssh_password or settings.vps_ssh_key)
     if not has_creds:
         logger.info("VPS SSH not configured — blog pages saved locally only (%s)", blog_dir)
         return len(all_files)
 
-    pushed = _sftp_push(all_files)
+    blog_files = [f for f in all_files if f.name != "sitemap.xml"]
+    pushed = _sftp_push(blog_files)
+
+    if sitemap_to_root:
+        pushed += _sftp_push_to_root([sitemap_to_root])
+
     return pushed
 
 
@@ -94,6 +102,53 @@ def _sftp_push(files: list[Path]) -> int:
     except Exception:
         logger.exception("SFTP push failed after %d files", pushed)
 
+    return pushed
+
+
+def _sftp_push_to_root(files: list[Path]) -> int:
+    """Push files to VPS website root (parent of blog dir) via SFTP."""
+    try:
+        import paramiko
+    except ImportError:
+        return 0
+
+    host = settings.vps_ssh_host
+    port = settings.vps_ssh_port
+    user = settings.vps_ssh_user
+    password = settings.vps_ssh_password
+    key_data = settings.vps_ssh_key
+    root_dir = str(Path(settings.vps_blog_path).parent)
+
+    pkey = None
+    if key_data:
+        try:
+            pkey = paramiko.RSAKey.from_private_key(io.StringIO(key_data))
+        except Exception:
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key(io.StringIO(key_data))
+            except Exception:
+                pass
+
+    if not pkey and not password:
+        return 0
+
+    pushed = 0
+    try:
+        transport = paramiko.Transport((host, port))
+        if pkey:
+            transport.connect(username=user, pkey=pkey)
+        else:
+            transport.connect(username=user, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        for local_path in files:
+            remote_path = f"{root_dir}/{local_path.name}"
+            sftp.put(str(local_path), remote_path)
+            pushed += 1
+            logger.info("SFTP root push: %s -> %s", local_path.name, remote_path)
+        sftp.close()
+        transport.close()
+    except Exception:
+        logger.warning("SFTP root push failed", exc_info=True)
     return pushed
 
 
