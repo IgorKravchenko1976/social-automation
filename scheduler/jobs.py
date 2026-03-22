@@ -208,14 +208,14 @@ async def create_daily_posts() -> None:
                 session.add(Publication(post_id=post.id, platform=platform.value))
             created_posts.append((post, "tourism_news"))
 
-        while len([p for p in created_posts if p[1] == "tourism_news"]) < 2:
-            topic = f"Актуальна туристична новина: цікавий тренд або подія у світі подорожей (#{random.randint(1000, 9999)})"
-            post = Post(title=topic[:200], content_raw=topic, source="ai")
+        while len([p for p in created_posts if p[1] in ("tourism_news", "leisure_travel")]) < 2:
+            leisure_topic = await _next_from_pool(session, LEISURE_TRAVEL_PLACES, "pool_leisure_fill")
+            post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
             session.add(post)
             await session.flush()
             for platform in ALL_PLATFORMS:
                 session.add(Publication(post_id=post.id, platform=platform.value))
-            created_posts.append((post, "tourism_news"))
+            created_posts.append((post, "leisure_travel"))
 
         # --- 1 Active sports/recreation place ---
         active_topic = await _next_from_pool(session, ACTIVE_SPORTS_PLACES, "pool_active")
