@@ -95,10 +95,16 @@ async def _check_instagram() -> TokenStatus:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
-                f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
+                f"{FACEBOOK_GRAPH_API}/{settings.instagram_user_id}",
                 params={"access_token": token, "fields": "id,username"},
             )
             data = r.json()
+            if "error" in data:
+                r2 = await client.get(
+                    f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
+                    params={"access_token": token, "fields": "id,username"},
+                )
+                data = r2.json()
             if "error" in data:
                 return TokenStatus("Instagram", configured=True, valid=False,
                                    error=data["error"].get("message", "invalid"))

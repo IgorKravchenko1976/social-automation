@@ -143,6 +143,23 @@ async def _collect_facebook(date_str: str) -> dict:
         )
         stats["posts"] = result.scalar() or 0
 
+    try:
+        resp = await client.get(
+            f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/insights",
+            params={
+                "metric": "page_impressions_unique",
+                "period": "day",
+                "access_token": token,
+            },
+        )
+        data = resp.json()
+        if "data" in data and data["data"]:
+            values = data["data"][0].get("values", [])
+            if values:
+                stats["views"] = values[-1].get("value", 0)
+    except Exception:
+        logger.debug("Facebook page impressions not available")
+
     pos, neg = await _collect_reactions(Platform.FACEBOOK.value, date_str)
     stats["likes"] = pos
     stats["dislikes"] = neg
@@ -164,7 +181,7 @@ async def _collect_instagram(date_str: str) -> dict:
 
     try:
         resp = await client.get(
-            f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
+            f"{FACEBOOK_GRAPH_API}/{settings.instagram_user_id}",
             params={
                 "fields": "followers_count,media_count",
                 "access_token": token,
@@ -175,6 +192,13 @@ async def _collect_instagram(date_str: str) -> dict:
             stats["subscribers"] = data.get("followers_count", 0)
         else:
             logger.warning("Instagram API error (subscribers): %s", data["error"].get("message"))
+            resp2 = await client.get(
+                f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
+                params={"fields": "followers_count,media_count", "access_token": token},
+            )
+            data2 = resp2.json()
+            if "error" not in data2:
+                stats["subscribers"] = data2.get("followers_count", 0)
     except Exception:
         logger.exception("Failed to get Instagram subscriber count")
 

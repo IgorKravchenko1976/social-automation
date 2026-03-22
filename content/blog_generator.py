@@ -109,6 +109,30 @@ def _fmt_date_human(dt_val: Optional[datetime]) -> str:
     return f"{dt_val.day} {months[dt_val.month - 1]} {dt_val.year}"
 
 
+import re as _re
+
+_STOP_WORDS = {"і", "в", "на", "з", "та", "до", "що", "як", "це", "для", "не", "або",
+               "the", "a", "an", "in", "on", "of", "to", "and", "is", "for", "with", "by",
+               "від", "при", "за", "по", "із", "але", "ще", "про", "у", "їх", "він", "вона"}
+
+def _extract_keywords(title: str, content: str, place_name: Optional[str] = None) -> str:
+    """Extract SEO keywords from title, content and place."""
+    text = f"{title} {(content or '')[:500]}"
+    words = _re.findall(r"[a-zA-Zа-яА-ЯіІїЇєЄґҐ'ʼ]{4,}", text.lower())
+    seen = set()
+    kw = []
+    for w in words:
+        if w not in _STOP_WORDS and w not in seen:
+            seen.add(w)
+            kw.append(w)
+        if len(kw) >= 15:
+            break
+    base = ["подорожі", "туризм", "travel", "I'M IN"]
+    if place_name:
+        base.insert(0, place_name)
+    return ", ".join(base + kw)
+
+
 def generate_post_html(
     post_id: int,
     title: str,
@@ -192,6 +216,9 @@ def generate_post_html(
         if lc in tr:
             og_locale_alts += f'\n    <meta property="og:locale:alternate" content="{loc}">'
 
+    keywords = _extract_keywords(title, content, place_name)
+    keywords_json = json.dumps(keywords, ensure_ascii=False)
+
     geo_json = ""
     if latitude and longitude:
         geo_json = f""",
@@ -208,6 +235,7 @@ def generate_post_html(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{safe_title} — I'M IN Blog</title>
     <meta name="description" content="{description}">
+    <meta name="keywords" content="{escape(keywords)}">
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
     <meta name="theme-color" content="#7C3AED">
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
@@ -260,7 +288,8 @@ def generate_post_html(
                 "@type": "ImageObject",
                 "url": "{SITE_URL}/logo-imin.png"
             }}
-        }}{geo_json}
+        }},
+        "keywords": {keywords_json}{geo_json}
     }}
     </script>
     <script type="application/ld+json">

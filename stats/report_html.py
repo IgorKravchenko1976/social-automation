@@ -312,12 +312,16 @@ def build_website_section(blog_status: dict) -> str:
     last_date = blog_status.get("last_date", "—")
     error = blog_status.get("error", "")
 
+    vps_synced = blog_status.get("vps_synced")
+
     if ok:
+        vps_icon = "✅" if vps_synced else ("⚠️" if vps_synced is False else "")
+        vps_text = " &bull; VPS: синхронізовано" if vps_synced else (" &bull; VPS: не синхронізовано" if vps_synced is False else "")
         status_html = f'<span style="color:#6ee7b7;font-weight:700;">✅ Онлайн</span>'
         detail = (
             f'<span style="color:#e2e8f0;">{total}</span> постів доступно &bull; '
             f'Останній: <span style="color:#e2e8f0;">{last_title[:50]}</span> '
-            f'<span style="color:#94a3b8;">({last_date})</span>'
+            f'<span style="color:#94a3b8;">({last_date})</span>{vps_text}'
         )
     else:
         status_html = f'<span style="color:#f87171;font-weight:700;">❌ Помилка</span>'

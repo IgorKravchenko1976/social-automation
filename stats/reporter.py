@@ -77,23 +77,43 @@ async def _send_email(subject: str, html: str) -> None:
 
 
 async def _check_blog_api() -> dict:
-    """Ping the public blog endpoint and return status summary."""
-    base_url = settings.webhook_base_url.rstrip("/")
+    """Check blog status from local posts.json and VPS availability."""
+    import json
+    from pathlib import Path
+
+    blog_dir = Path(settings.data_dir) / "blog"
+    posts_json = blog_dir / "posts.json"
+
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(f"{base_url}/api/blog/posts", params={"limit": 50})
-        if resp.status_code != 200:
-            return {"ok": False, "error": f"HTTP {resp.status_code}"}
-        posts = resp.json()
+        if posts_json.is_file():
+            posts = json.loads(posts_json.read_text(encoding="utf-8"))
+        else:
+            base_url = settings.webhook_base_url.rstrip("/")
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(f"{base_url}/api/blog/posts", params={"limit": 50})
+            if resp.status_code != 200:
+                return {"ok": False, "error": f"HTTP {resp.status_code}"}
+            posts = resp.json()
+
         if not posts:
             return {"ok": True, "total_posts": 0, "last_title": "—", "last_date": "—"}
-        first = posts[0]
-        last_date = (first.get("published_at") or first.get("created_at") or "")[:10]
+        first = posts[0] if isinstance(posts, list) else {}
+        last_date = str(first.get("published_at") or first.get("created_at") or "")[:10]
+
+        vps_ok = False
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get("https://www.im-in.net/blog/posts.json")
+                vps_ok = r.status_code == 200 and len(r.content) > 10
+        except Exception:
+            pass
+
         return {
             "ok": True,
-            "total_posts": len(posts),
+            "total_posts": len(posts) if isinstance(posts, list) else 0,
             "last_title": first.get("title") or "(без заголовку)",
             "last_date": last_date,
+            "vps_synced": vps_ok,
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:120]}
