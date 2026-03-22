@@ -12,19 +12,19 @@ class Platform(str, Enum):
 
 
 def configured_platforms() -> list[Platform]:
-    """Return only platforms that have credentials configured."""
-    from config.settings import settings
+    """Return only platforms that have real (non-placeholder) credentials."""
+    from config.settings import settings, is_placeholder
 
     configured = []
-    if settings.telegram_bot_token and settings.telegram_channel_id:
+    if not is_placeholder(settings.telegram_bot_token) and not is_placeholder(settings.telegram_channel_id):
         configured.append(Platform.TELEGRAM)
-    if settings.facebook_page_id and settings.facebook_page_access_token:
+    if not is_placeholder(settings.facebook_page_id) and not is_placeholder(settings.facebook_page_access_token):
         configured.append(Platform.FACEBOOK)
-    if settings.instagram_user_id and settings.instagram_access_token:
+    if not is_placeholder(settings.instagram_user_id) and not is_placeholder(settings.instagram_access_token):
         configured.append(Platform.INSTAGRAM)
-    if settings.twitter_bearer_token and settings.twitter_api_key:
+    if not is_placeholder(settings.twitter_bearer_token) and not is_placeholder(settings.twitter_api_key):
         configured.append(Platform.TWITTER)
-    if settings.tiktok_access_token:
+    if not is_placeholder(settings.tiktok_access_token):
         configured.append(Platform.TIKTOK)
     return configured
 

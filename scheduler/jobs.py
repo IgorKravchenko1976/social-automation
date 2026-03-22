@@ -21,6 +21,7 @@ from db.models import Post, Publication, PostStatus, KVStore
 logger = logging.getLogger(__name__)
 
 ALL_PLATFORMS = configured_platforms()
+logger.info("Active platforms: %s", [p.value for p in ALL_PLATFORMS])
 
 MAX_RETRIES = 3
 
