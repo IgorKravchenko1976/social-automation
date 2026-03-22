@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     # Admin API key (required for all write/admin endpoints)
     admin_api_key: str = ""
 
+    # VPS SSH for blog sync (optional — if not set, blog pages stay on Railway only)
+    vps_ssh_host: str = ""
+    vps_ssh_port: int = 22
+    vps_ssh_user: str = "root"
+    vps_ssh_key: str = ""
+    vps_blog_path: str = "/var/www/im-in.net/blog"
+
     # Persistent data directory (mount Railway Volume here)
     data_dir: str = "/data"
 

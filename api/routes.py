@@ -180,6 +180,26 @@ async def serve_media(filename: str):
     return FileResponse(file_path, headers={"Cache-Control": "public, max-age=86400"})
 
 
+@public_router.get("/blog/page/{post_id}")
+async def serve_blog_page(post_id: int):
+    """Serve a generated static HTML blog page (fallback when VPS is down)."""
+    blog_dir = Path(settings.data_dir) / "blog"
+    page = blog_dir / f"post-{post_id}.html"
+    if not page.is_file():
+        raise HTTPException(404, "Blog page not found")
+    return FileResponse(page, media_type="text/html", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@public_router.get("/blog/index.json")
+async def serve_blog_index():
+    """Serve the posts.json index (fallback for blog listing)."""
+    blog_dir = Path(settings.data_dir) / "blog"
+    idx = blog_dir / "posts.json"
+    if not idx.is_file():
+        raise HTTPException(404, "Blog index not found")
+    return FileResponse(idx, media_type="application/json", headers={"Cache-Control": "public, max-age=300"})
+
+
 @public_router.post("/chat", response_model=ChatResponse, dependencies=[Depends(rate_limit_chat)])
 async def web_chat(body: ChatRequest):
     """Public chat endpoint for the website widget (rate-limited)."""

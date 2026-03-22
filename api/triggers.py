@@ -77,6 +77,18 @@ async def trigger_daily_report():
         }
 
 
+@router.post("/trigger/blog-sync")
+async def trigger_blog_sync():
+    """Force regeneration of all blog pages + SFTP push to VPS."""
+    from scheduler.blog_sync import sync_blog_to_vps
+    try:
+        count = await sync_blog_to_vps()
+        return {"status": "ok", "synced_files": count}
+    except Exception as e:
+        logger.exception("Blog sync trigger failed")
+        return {"status": "error", "error": str(e)}
+
+
 @router.post("/trigger/health-check")
 async def trigger_health_check():
     from scheduler.health_check import run_health_check

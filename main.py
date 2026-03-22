@@ -59,6 +59,10 @@ def _setup_scheduler() -> None:
     scheduler.add_job(run_health_check, "interval", minutes=30,
                       id="health_check", replace_existing=True)
 
+    from scheduler.blog_sync import sync_blog_to_vps
+    scheduler.add_job(sync_blog_to_vps, CronTrigger(hour=21, minute=0, timezone=tz),
+                      id="blog_sync_daily", replace_existing=True)
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 
@@ -95,6 +99,9 @@ async def lifespan(app: FastAPI):
 
     from scheduler.health_check import run_health_check
     await _safe(run_health_check(), "health_check")
+
+    from scheduler.blog_sync import sync_blog_to_vps
+    await _safe(sync_blog_to_vps(), "blog_generate")
 
     logger.info("Social Media Automation is running! Schedule: %s (%s)",
                 settings.post_schedule, settings.timezone)
