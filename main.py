@@ -78,8 +78,12 @@ async def lifespan(app: FastAPI):
     _setup_scheduler()
     scheduler.start()
 
-    from scheduler.jobs import ensure_daily_posts_exist, publish_missed_slots, expire_old_queued_publications
+    from scheduler.jobs import (
+        ensure_daily_posts_exist, publish_missed_slots,
+        expire_old_queued_publications, expire_inactive_platform_publications,
+    )
     await _safe(expire_old_queued_publications(), "expire_old_pubs")
+    await _safe(expire_inactive_platform_publications(), "expire_inactive_platforms")
     await _safe(ensure_daily_posts_exist(), "ensure_posts")
     await _safe(publish_missed_slots(), "publish_missed")
 

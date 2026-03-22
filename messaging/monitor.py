@@ -5,13 +5,13 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.platforms import Platform, get_platform_instance
+from config.platforms import Platform, configured_platforms, get_platform_instance
 from db.database import async_session
 from db.models import Message, MessageDirection
 
 logger = logging.getLogger(__name__)
 
-MONITORED_PLATFORMS = [Platform.TELEGRAM, Platform.FACEBOOK, Platform.TWITTER, Platform.INSTAGRAM]
+_ALL_MONITORABLE = {Platform.TELEGRAM, Platform.FACEBOOK, Platform.TWITTER, Platform.INSTAGRAM}
 
 
 async def poll_all_messages() -> list[Message]:
@@ -19,8 +19,9 @@ async def poll_all_messages() -> list[Message]:
     new_messages = []
     poll_errors: list[str] = []
 
+    active = _ALL_MONITORABLE & set(configured_platforms())
     async with async_session() as session:
-        for platform in MONITORED_PLATFORMS:
+        for platform in active:
             try:
                 adapter = get_platform_instance(platform)
                 raw_messages = await adapter.get_new_messages()

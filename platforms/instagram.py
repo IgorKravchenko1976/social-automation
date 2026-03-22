@@ -7,7 +7,7 @@ from typing import Optional
 import httpx
 
 from config.settings import settings
-from config.platforms import Platform, INSTAGRAM_GRAPH_API as GRAPH_API, FACEBOOK_GRAPH_API
+from config.platforms import Platform, FACEBOOK_GRAPH_API as GRAPH_API
 from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
         try:
             with open(image_path, "rb") as f:
                 resp = await client.post(
-                    f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/photos",
+                    f"{GRAPH_API}/{settings.facebook_page_id}/photos",
                     params={"access_token": fb_token},
                     data={"published": "false"},
                     files={"source": ("image.jpg", f, "image/jpeg")},
@@ -129,7 +129,7 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                 return None
 
             img_resp = await client.get(
-                f"{FACEBOOK_GRAPH_API}/{photo_id}",
+                f"{GRAPH_API}/{photo_id}",
                 params={"access_token": fb_token, "fields": "images"},
             )
             img_data = img_resp.json()

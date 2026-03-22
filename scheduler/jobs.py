@@ -437,6 +437,27 @@ async def _publish_single(
                          platform.value, post.id, pub.retry_count, str(e)[:200])
 
 
+async def expire_inactive_platform_publications() -> None:
+    """Mark queued/retrying publications for unconfigured platforms as failed."""
+    active = {p.value for p in ALL_PLATFORMS}
+    async with async_session() as session:
+        result = await session.execute(
+            select(Publication).where(
+                Publication.status.in_([PostStatus.QUEUED, PostStatus.PUBLISHING]),
+            )
+        )
+        pubs = result.scalars().all()
+        expired = 0
+        for pub in pubs:
+            if pub.platform not in active:
+                pub.status = PostStatus.FAILED
+                pub.error_message = f"Platform '{pub.platform}' is not active (no credentials)"
+                expired += 1
+        await session.commit()
+        if expired:
+            logger.info("Expired %d publications for inactive platforms", expired)
+
+
 async def expire_old_queued_publications() -> None:
     """Mark queued publications from previous days as failed so they don't block today's posts."""
     today_start_utc = get_today_start_utc()
