@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 class InstagramPlatform(TokenPlatformMixin, BasePlatform):
     platform = Platform.INSTAGRAM
-    _platform_name = "instagram"
-    _env_token_attr = "instagram_access_token"
+    _platform_name = "facebook"
+    _env_token_attr = "facebook_page_access_token"
 
     @property
     def _user_id(self) -> str:
@@ -93,28 +93,23 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
     async def _get_public_image_url(self, client: httpx.AsyncClient, image_path: str) -> str | None:
         """Get a public URL for the image by uploading as unpublished Facebook photo."""
-        fb_token = await self._get_fb_token()
-        if fb_token and settings.facebook_page_id:
-            url = await self._upload_via_facebook(client, image_path, fb_token)
+        if self._token and settings.facebook_page_id:
+            url = await self._upload_via_facebook(client, image_path)
             if url:
                 return url
 
         logger.error("No method available to get public image URL for Instagram")
         return None
 
-    async def _get_fb_token(self) -> str | None:
-        from stats.token_renewer import get_active_token
-        return await get_active_token("facebook") or settings.facebook_page_access_token or None
-
     async def _upload_via_facebook(
-        self, client: httpx.AsyncClient, image_path: str, fb_token: str,
+        self, client: httpx.AsyncClient, image_path: str,
     ) -> str | None:
         """Upload image as unpublished Facebook photo, return the public source URL."""
         try:
             with open(image_path, "rb") as f:
                 resp = await client.post(
                     f"{GRAPH_API}/{settings.facebook_page_id}/photos",
-                    params={"access_token": fb_token},
+                    params={"access_token": self._token},
                     data={"published": "false"},
                     files={"source": ("image.jpg", f, "image/jpeg")},
                 )
@@ -130,7 +125,7 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
             img_resp = await client.get(
                 f"{GRAPH_API}/{photo_id}",
-                params={"access_token": fb_token, "fields": "images"},
+                params={"access_token": self._token, "fields": "images"},
             )
             img_data = img_resp.json()
             images = img_data.get("images", [])
