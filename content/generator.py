@@ -321,6 +321,64 @@ async def generate_auto_reply(
     return reply_text, category
 
 
+async def generate_unique_topic(
+    direction: str,
+    content_type: str,
+    recent_titles: list[str],
+) -> str:
+    """Ask AI to generate a specific unique topic within a broad direction.
+
+    The AI receives the direction category and a list of recent post titles
+    (last 60 days) so it avoids repetition.
+    """
+    client = _get_client()
+
+    recent_block = ""
+    if recent_titles:
+        titles_text = "\n".join(f"- {t}" for t in recent_titles[-80:])
+        recent_block = (
+            f"\n\nОСЬ ТЕМИ ПОСТІВ ЗА ОСТАННІ 60 ДНІВ (НЕ ПОВТОРЮЙ ЇХ!):\n{titles_text}"
+        )
+
+    type_hints = {
+        "active_travel": "спортивне/активне місце, подію чи вид спорту для мандрівників",
+        "leisure_travel": "красиве місце, місто, країну, локацію чи гастро-досвід для мандрівників",
+        "feature": "конкретну функцію або можливість мобільного додатку I'M IN для мандрівників",
+    }
+    hint = type_hints.get(content_type, "цікаву тему для мандрівників")
+
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ти генеруєш ОДНУ конкретну тему для поста в соціальних мережах. "
+                    "Тема повинна бути унікальною і НЕ повторювати жодну з наведених минулих тем. "
+                    "Поверни ТІЛЬКИ тему (1-2 речення), без пояснень, нумерації чи коментарів."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Напрямок: {direction}\n"
+                    f"Потрібно придумати: {hint}\n"
+                    f"Мова: українська{recent_block}\n\n"
+                    "Згенеруй одну конкретну, цікаву тему у цьому напрямку, "
+                    "яка відрізняється від усіх перерахованих вище."
+                ),
+            },
+        ],
+        max_tokens=150,
+        temperature=1.0,
+    )
+
+    topic = response.choices[0].message.content.strip()
+    topic = topic.lstrip("- •123456789.").strip()
+    logger.info("Generated unique topic [%s/%s]: %s", content_type, direction, topic[:80])
+    return topic
+
+
 async def generate_image_prompt(post_text: str) -> str:
     """Generate a DALL-E prompt from post text."""
     client = _get_client()

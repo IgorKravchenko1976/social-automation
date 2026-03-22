@@ -10,13 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.platforms import Platform, configured_platforms, get_platform_instance
 from config.settings import settings, get_today_start_utc, get_now_local, parse_slot_time
-from content.generator import generate_post_text
-from content.product_knowledge import FEATURE_TOPICS
-from content.tourism_topics import TOURISM_RSS_FEEDS, ACTIVE_SPORTS_PLACES, LEISURE_TRAVEL_PLACES, BANNED_RSS_KEYWORDS
+from content.generator import generate_post_text, generate_unique_topic
+from content.tourism_topics import (
+    TOURISM_RSS_FEEDS, BANNED_RSS_KEYWORDS,
+    ACTIVE_DIRECTIONS, LEISURE_DIRECTIONS, FEATURE_DIRECTIONS,
+)
 from content.media import get_image_for_post, create_slideshow_video, cleanup_media_file
 from content.rss_parser import fetch_feed
 from db.database import async_session
-from db.models import Post, Publication, PostStatus, KVStore
+from db.models import Post, Publication, PostStatus
 
 logger = logging.getLogger(__name__)
 
@@ -111,22 +113,27 @@ async def publish_missed_slots() -> None:
                 logger.exception("Error publishing missed slot %d", idx)
 
 
-async def _next_from_pool(session, pool: list[str], index_key: str) -> str:
-    """Pick the next item from a topic pool, cycling forever. Index persisted in DB."""
+async def _get_recent_titles(session: AsyncSession, days: int = 60) -> list[str]:
+    """Fetch post titles from the last N days for uniqueness checks."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await session.execute(
-        select(KVStore).where(KVStore.key == index_key)
+        select(Post.title)
+        .where(Post.created_at >= cutoff, Post.title.isnot(None))
+        .order_by(Post.created_at.desc())
     )
-    row = result.scalar_one_or_none()
-    idx = int(row.value) if row else 0
-    topic = pool[idx % len(pool)]
-    new_idx = idx + 1
+    return [row[0] for row in result.all() if row[0]]
 
-    if row:
-        row.value = str(new_idx)
-    else:
-        session.add(KVStore(key=index_key, value=str(new_idx)))
-    await session.flush()
 
+async def _pick_unique_topic(
+    session: AsyncSession,
+    directions: list[str],
+    content_type: str,
+    recent_titles: list[str],
+) -> str:
+    """Pick a random direction and ask AI to generate a unique topic within it."""
+    direction = random.choice(directions)
+    topic = await generate_unique_topic(direction, content_type, recent_titles)
     return topic
 
 
@@ -185,6 +192,7 @@ async def create_daily_posts() -> None:
 
     async with async_session() as session:
         created_posts: list[tuple[Post, str]] = []
+        recent_titles = await _get_recent_titles(session, days=60)
 
         # --- 2 Tourism news from RSS ---
         news_entries = await _fetch_tourism_news(session, count=2)
@@ -209,40 +217,52 @@ async def create_daily_posts() -> None:
             created_posts.append((post, "tourism_news"))
 
         while len([p for p in created_posts if p[1] in ("tourism_news", "leisure_travel")]) < 2:
-            leisure_topic = await _next_from_pool(session, LEISURE_TRAVEL_PLACES, "pool_leisure_fill")
+            leisure_topic = await _pick_unique_topic(
+                session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles,
+            )
             post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
             session.add(post)
             await session.flush()
             for platform in ALL_PLATFORMS:
                 session.add(Publication(post_id=post.id, platform=platform.value))
             created_posts.append((post, "leisure_travel"))
+            recent_titles.append(leisure_topic)
 
         # --- 1 Active sports/recreation place ---
-        active_topic = await _next_from_pool(session, ACTIVE_SPORTS_PLACES, "pool_active")
+        active_topic = await _pick_unique_topic(
+            session, ACTIVE_DIRECTIONS, "active_travel", recent_titles,
+        )
         post = Post(title=active_topic[:200], content_raw=active_topic, source="ai")
         session.add(post)
         await session.flush()
         for platform in ALL_PLATFORMS:
             session.add(Publication(post_id=post.id, platform=platform.value))
         created_posts.append((post, "active_travel"))
+        recent_titles.append(active_topic)
 
         # --- 1 App feature ---
-        feature_topic = await _next_from_pool(session, FEATURE_TOPICS, "pool_feature")
+        feature_topic = await _pick_unique_topic(
+            session, FEATURE_DIRECTIONS, "feature", recent_titles,
+        )
         post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
         session.add(post)
         await session.flush()
         for platform in ALL_PLATFORMS:
             session.add(Publication(post_id=post.id, platform=platform.value))
         created_posts.append((post, "feature"))
+        recent_titles.append(feature_topic)
 
         # --- 1 Leisure travel place ---
-        leisure_topic = await _next_from_pool(session, LEISURE_TRAVEL_PLACES, "pool_leisure")
+        leisure_topic = await _pick_unique_topic(
+            session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles,
+        )
         post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
         session.add(post)
         await session.flush()
         for platform in ALL_PLATFORMS:
             session.add(Publication(post_id=post.id, platform=platform.value))
         created_posts.append((post, "leisure_travel"))
+        recent_titles.append(leisure_topic)
 
         await session.commit()
         logger.info(
