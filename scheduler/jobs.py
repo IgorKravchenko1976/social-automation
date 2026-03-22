@@ -110,24 +110,21 @@ async def publish_missed_slots() -> None:
                 logger.exception("Error publishing missed slot %d", idx)
 
 
-async def _next_from_pool(pool: list[str], index_key: str) -> str:
+async def _next_from_pool(session, pool: list[str], index_key: str) -> str:
     """Pick the next item from a topic pool, cycling forever. Index persisted in DB."""
-    from db.models import KVStore
+    result = await session.execute(
+        select(KVStore).where(KVStore.key == index_key)
+    )
+    row = result.scalar_one_or_none()
+    idx = int(row.value) if row else 0
+    topic = pool[idx % len(pool)]
+    new_idx = idx + 1
 
-    async with async_session() as session:
-        result = await session.execute(
-            select(KVStore).where(KVStore.key == index_key)
-        )
-        row = result.scalar_one_or_none()
-        idx = int(row.value) if row else 0
-        topic = pool[idx % len(pool)]
-        new_idx = idx + 1
-
-        if row:
-            row.value = str(new_idx)
-        else:
-            session.add(KVStore(key=index_key, value=str(new_idx)))
-        await session.commit()
+    if row:
+        row.value = str(new_idx)
+    else:
+        session.add(KVStore(key=index_key, value=str(new_idx)))
+    await session.flush()
 
     return topic
 
@@ -220,7 +217,7 @@ async def create_daily_posts() -> None:
             created_posts.append((post, "tourism_news"))
 
         # --- 1 Active sports/recreation place ---
-        active_topic = await _next_from_pool(ACTIVE_SPORTS_PLACES, "pool_active")
+        active_topic = await _next_from_pool(session, ACTIVE_SPORTS_PLACES, "pool_active")
         post = Post(title=active_topic[:200], content_raw=active_topic, source="ai")
         session.add(post)
         await session.flush()
@@ -229,7 +226,7 @@ async def create_daily_posts() -> None:
         created_posts.append((post, "active_travel"))
 
         # --- 1 App feature ---
-        feature_topic = await _next_from_pool(FEATURE_TOPICS, "pool_feature")
+        feature_topic = await _next_from_pool(session, FEATURE_TOPICS, "pool_feature")
         post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
         session.add(post)
         await session.flush()
@@ -238,7 +235,7 @@ async def create_daily_posts() -> None:
         created_posts.append((post, "feature"))
 
         # --- 1 Leisure travel place ---
-        leisure_topic = await _next_from_pool(LEISURE_TRAVEL_PLACES, "pool_leisure")
+        leisure_topic = await _next_from_pool(session, LEISURE_TRAVEL_PLACES, "pool_leisure")
         post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
         session.add(post)
         await session.flush()
