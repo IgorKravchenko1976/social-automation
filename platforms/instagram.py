@@ -7,27 +7,62 @@ from typing import Optional
 import httpx
 
 from config.settings import settings
-from config.platforms import (
-    Platform, INSTAGRAM_GRAPH_API as IG_API, FACEBOOK_GRAPH_API as FB_API,
-)
+from config.platforms import Platform, FACEBOOK_GRAPH_API as GRAPH_API
 from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin
 
 logger = logging.getLogger(__name__)
 
 
 class InstagramPlatform(TokenPlatformMixin, BasePlatform):
-    platform = Platform.INSTAGRAM
-    _platform_name = "instagram"
-    _env_token_attr = "instagram_access_token"
+    """Instagram publishing via Facebook Graph API.
 
-    @property
-    def _user_id(self) -> str:
-        return settings.instagram_user_id
+    Requires: Facebook Page linked to an Instagram Business/Creator account.
+    Uses the Facebook Page Access Token for all operations.
+    Auto-discovers the IG Business Account ID from the Facebook Page.
+    """
+    platform = Platform.INSTAGRAM
+    _platform_name = "facebook"
+    _env_token_attr = "facebook_page_access_token"
+
+    _resolved_ig_id: str | None = None
+
+    async def _resolve_ig_user_id(self) -> str | None:
+        """Discover the IG Business Account ID from the linked Facebook Page."""
+        if self._resolved_ig_id:
+            return self._resolved_ig_id
+
+        if not settings.facebook_page_id or not self._token:
+            return None
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{GRAPH_API}/{settings.facebook_page_id}",
+                    params={
+                        "access_token": self._token,
+                        "fields": "instagram_business_account",
+                    },
+                )
+                data = resp.json()
+                ig_id = data.get("instagram_business_account", {}).get("id")
+                if ig_id:
+                    logger.info("Resolved IG Business Account ID: %s", ig_id)
+                    self._resolved_ig_id = ig_id
+                    return ig_id
+                else:
+                    logger.warning(
+                        "Facebook page %s has no linked Instagram Business Account. "
+                        "Link your Instagram in Facebook Page Settings → Linked Accounts.",
+                        settings.facebook_page_id,
+                    )
+        except Exception:
+            logger.exception("Failed to resolve IG Business Account ID")
+
+        return None
 
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
-        """Instagram requires an image for every post. If no image, generate one."""
-        if not self._user_id or not settings.instagram_access_token:
-            return PublishResult(success=False, error="Instagram not configured")
+        if not settings.facebook_page_id or not settings.facebook_page_access_token:
+            return PublishResult(success=False, error="Instagram not configured (need FB page credentials)")
 
         if not image_path:
             from content.media import get_image_for_post
@@ -37,21 +72,30 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
         try:
             await self._ensure_token()
+
+            ig_id = await self._resolve_ig_user_id()
+            if not ig_id:
+                return PublishResult(
+                    success=False,
+                    error="Instagram Business Account not linked to Facebook page. "
+                          "Link it in FB Page Settings → Linked Accounts.",
+                )
+
             async with httpx.AsyncClient(timeout=120) as client:
-                return await self._publish_with_image(client, text, image_path)
+                return await self._publish_with_image(client, text, image_path, ig_id)
         except Exception as e:
             logger.exception("Instagram publish failed")
             return PublishResult(success=False, error=str(e))
 
     async def _publish_with_image(
-        self, client: httpx.AsyncClient, caption: str, image_path: str
+        self, client: httpx.AsyncClient, caption: str, image_path: str, ig_id: str,
     ) -> PublishResult:
-        image_url = await self._get_public_image_url(client, image_path)
+        image_url = await self._upload_via_facebook(client, image_path)
         if not image_url:
             return PublishResult(success=False, error="Could not get public URL for image")
 
         resp = await client.post(
-            f"{IG_API}/{self._user_id}/media",
+            f"{GRAPH_API}/{ig_id}/media",
             params={"access_token": self._token},
             data={"image_url": image_url, "caption": caption[:2200]},
         )
@@ -69,7 +113,7 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
         for _ in range(6):
             status_resp = await client.get(
-                f"{IG_API}/{container_id}",
+                f"{GRAPH_API}/{container_id}",
                 params={"access_token": self._token, "fields": "status_code"},
             )
             status_data = status_resp.json()
@@ -81,7 +125,7 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
             await asyncio.sleep(3)
 
         pub_resp = await client.post(
-            f"{IG_API}/{self._user_id}/media_publish",
+            f"{GRAPH_API}/{ig_id}/media_publish",
             params={"access_token": self._token},
             data={"creation_id": container_id},
         )
@@ -93,32 +137,15 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
         return PublishResult(success=True, platform_post_id=pub_data.get("id"))
 
-    # ── Image hosting via Facebook CDN ───────────────────────────────────
-
-    async def _get_public_image_url(self, client: httpx.AsyncClient, image_path: str) -> str | None:
-        """Upload image as unpublished Facebook photo to get a public URL."""
-        fb_token = await self._get_fb_token()
-        if fb_token and settings.facebook_page_id:
-            url = await self._upload_via_facebook(client, image_path, fb_token)
-            if url:
-                return url
-
-        logger.error("Cannot get public URL for image (need Facebook credentials)")
-        return None
-
-    async def _get_fb_token(self) -> str | None:
-        from stats.token_renewer import get_active_token
-        return await get_active_token("facebook") or settings.facebook_page_access_token or None
-
     async def _upload_via_facebook(
-        self, client: httpx.AsyncClient, image_path: str, fb_token: str,
+        self, client: httpx.AsyncClient, image_path: str,
     ) -> str | None:
         """Upload image as unpublished Facebook photo, return the public source URL."""
         try:
             with open(image_path, "rb") as f:
                 resp = await client.post(
-                    f"{FB_API}/{settings.facebook_page_id}/photos",
-                    params={"access_token": fb_token},
+                    f"{GRAPH_API}/{settings.facebook_page_id}/photos",
+                    params={"access_token": self._token},
                     data={"published": "false"},
                     files={"source": ("image.jpg", f, "image/jpeg")},
                 )
@@ -133,8 +160,8 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                 return None
 
             img_resp = await client.get(
-                f"{FB_API}/{photo_id}",
-                params={"access_token": fb_token, "fields": "images"},
+                f"{GRAPH_API}/{photo_id}",
+                params={"access_token": self._token, "fields": "images"},
             )
             img_data = img_resp.json()
             images = img_data.get("images", [])
@@ -148,20 +175,21 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
             logger.exception("Facebook image upload for Instagram failed")
             return None
 
-    # ── Video, messages, replies ─────────────────────────────────────────
-
     async def publish_video(self, text: str, video_path: str) -> PublishResult:
         return PublishResult(success=False, error="Instagram video publishing not yet implemented via API")
 
     async def get_new_messages(self) -> list[dict]:
         """Fetch recent comments on Instagram media."""
-        if not self._user_id or not settings.instagram_access_token:
+        if not settings.facebook_page_id:
             return []
         try:
             await self._ensure_token()
+            ig_id = await self._resolve_ig_user_id()
+            if not ig_id:
+                return []
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(
-                    f"{IG_API}/{self._user_id}/media",
+                    f"{GRAPH_API}/{ig_id}/media",
                     params={
                         "access_token": self._token,
                         "fields": "id,comments{id,from,text,timestamp}",
@@ -190,13 +218,13 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
     async def send_reply(self, platform_message_id: str, text: str) -> bool:
         """Reply to an Instagram comment."""
-        if not self._user_id:
+        if not settings.facebook_page_id:
             return False
         try:
             await self._ensure_token()
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
-                    f"{IG_API}/{platform_message_id}/replies",
+                    f"{GRAPH_API}/{platform_message_id}/replies",
                     params={"access_token": self._token},
                     data={"message": text},
                 )
