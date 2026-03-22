@@ -137,6 +137,20 @@ async def _pick_unique_topic(
     return topic
 
 
+async def _pick_feature_topic(
+    session: AsyncSession,
+    directions: list[str],
+    recent_titles: list[str],
+    travel_context: str,
+) -> str:
+    """Generate a feature topic tied to a real travel context from today's posts."""
+    direction = random.choice(directions)
+    topic = await generate_unique_topic(
+        direction, "feature", recent_titles, travel_context=travel_context,
+    )
+    return topic
+
+
 def _is_banned(title: str, summary: str) -> bool:
     """Check if an RSS entry contains banned political/military keywords."""
     text = (title + " " + summary).lower()
@@ -178,11 +192,11 @@ async def _fetch_tourism_news(session, count: int = 2) -> list[dict]:
 
 async def create_daily_posts() -> None:
     """Generate 5 posts for today:
-    - 2 tourism news (from RSS feeds, with source links)
-    - 1 app feature
-    - 1 active sports/recreation place
-    - 1 leisure travel place
-    Order: news, active, news, feature, leisure
+    - 2 tourism news (from RSS, priority Ukraine; fallback = leisure travel)
+    - 1 active sports/events (tied to location)
+    - 1 leisure travel (places, culture, gastro)
+    - 1 app feature (tied to one of today's travel topics)
+    Order: news, active, leisure, news, feature
     """
     logger.info("=== CREATE POSTS === Starting daily post creation for %d platforms: %s",
                 len(ALL_PLATFORMS), [p.value for p in ALL_PLATFORMS])
@@ -193,6 +207,7 @@ async def create_daily_posts() -> None:
     async with async_session() as session:
         created_posts: list[tuple[Post, str]] = []
         recent_titles = await _get_recent_titles(session, days=60)
+        today_travel_topics: list[str] = []
 
         # --- 2 Tourism news from RSS ---
         news_entries = await _fetch_tourism_news(session, count=2)
@@ -215,6 +230,7 @@ async def create_daily_posts() -> None:
             for platform in ALL_PLATFORMS:
                 session.add(Publication(post_id=post.id, platform=platform.value))
             created_posts.append((post, "tourism_news"))
+            today_travel_topics.append(entry["title"][:200])
 
         while len([p for p in created_posts if p[1] in ("tourism_news", "leisure_travel")]) < 2:
             leisure_topic = await _pick_unique_topic(
@@ -227,8 +243,9 @@ async def create_daily_posts() -> None:
                 session.add(Publication(post_id=post.id, platform=platform.value))
             created_posts.append((post, "leisure_travel"))
             recent_titles.append(leisure_topic)
+            today_travel_topics.append(leisure_topic[:200])
 
-        # --- 1 Active sports/recreation place ---
+        # --- 1 Active sports/events (tied to location) ---
         active_topic = await _pick_unique_topic(
             session, ACTIVE_DIRECTIONS, "active_travel", recent_titles,
         )
@@ -239,20 +256,9 @@ async def create_daily_posts() -> None:
             session.add(Publication(post_id=post.id, platform=platform.value))
         created_posts.append((post, "active_travel"))
         recent_titles.append(active_topic)
+        today_travel_topics.append(active_topic[:200])
 
-        # --- 1 App feature ---
-        feature_topic = await _pick_unique_topic(
-            session, FEATURE_DIRECTIONS, "feature", recent_titles,
-        )
-        post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
-        session.add(post)
-        await session.flush()
-        for platform in ALL_PLATFORMS:
-            session.add(Publication(post_id=post.id, platform=platform.value))
-        created_posts.append((post, "feature"))
-        recent_titles.append(feature_topic)
-
-        # --- 1 Leisure travel place ---
+        # --- 1 Leisure travel (places, culture, gastro) ---
         leisure_topic = await _pick_unique_topic(
             session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles,
         )
@@ -263,6 +269,20 @@ async def create_daily_posts() -> None:
             session.add(Publication(post_id=post.id, platform=platform.value))
         created_posts.append((post, "leisure_travel"))
         recent_titles.append(leisure_topic)
+        today_travel_topics.append(leisure_topic[:200])
+
+        # --- 1 App feature (tied to one of today's travel topics) ---
+        travel_context = random.choice(today_travel_topics) if today_travel_topics else ""
+        feature_topic = await _pick_feature_topic(
+            session, FEATURE_DIRECTIONS, recent_titles, travel_context,
+        )
+        post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
+        session.add(post)
+        await session.flush()
+        for platform in ALL_PLATFORMS:
+            session.add(Publication(post_id=post.id, platform=platform.value))
+        created_posts.append((post, "feature"))
+        recent_titles.append(feature_topic)
 
         await session.commit()
         logger.info(

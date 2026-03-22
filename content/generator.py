@@ -27,11 +27,18 @@ Website: {app_website}
 {product_knowledge}
 
 === ЗАВДАННЯ ===
-Створи короткий пост про КОНКРЕТНУ ФУНКЦІЮ додатку I'M IN.
+Створи короткий пост про КОНКРЕТНУ ФУНКЦІЮ додатку I'M IN,
+прив'язавши її до РЕАЛЬНОЇ ПОДОРОЖНЬОЇ СИТУАЦІЇ з теми поста.
+
+Наприклад:
+- Тема "Тенісний турнір у Парижі" → покажи як на карті I'M IN знайти події поруч з Ролан Гаррос
+- Тема "Львівські кав'ярні" → покажи як зберігати улюблені місця та ділитись з друзями
+- Тема "Серфінг на Балі" → покажи як створити подію з фото/відео прямо на пляжі
 
 === СТИЛЬ ===
 - Дружній, надихаючий, як друг-мандрівник
 - Короткий (3-5 речень), яскравий
+- Спочатку — подорожня ситуація (1 речення), потім — як I'M IN допомагає (2-3 речення)
 - 2-4 емодзі
 - Конкретні деталі з документації (числа, параметри)
 - Заклик: відвідай www.im-in.net
@@ -351,12 +358,17 @@ async def generate_unique_topic(
     direction: str,
     content_type: str,
     recent_titles: list[str],
+    *,
+    travel_context: str = "",
 ) -> str:
     """Ask AI to generate a specific unique topic within a broad direction.
 
     The AI receives the direction category and a list of recent post titles
     (last 60 days) so it avoids repetition. Topics are always tied to a
     specific place/location and prioritize fresh events.
+
+    For feature posts, travel_context provides a real travel topic from today's
+    posts so the feature can be tied to a practical travel situation.
     """
     client = _get_client()
 
@@ -365,6 +377,12 @@ async def generate_unique_topic(
         titles_text = "\n".join(f"- {t}" for t in recent_titles[-80:])
         recent_block = (
             f"\n\nОСЬ ТЕМИ ПОСТІВ ЗА ОСТАННІ 60 ДНІВ (НЕ ПОВТОРЮЙ ЇХ!):\n{titles_text}"
+        )
+
+    context_block = ""
+    if travel_context and content_type == "feature":
+        context_block = (
+            f"\n\nСЬОГОДНІШНЯ ПОДОРОЖНЯ ТЕМА (прив'яжи функцію до неї): {travel_context}"
         )
 
     type_hints = {
@@ -385,7 +403,8 @@ async def generate_unique_topic(
         ),
         "feature": (
             "конкретну функцію або можливість мобільного додатку I'M IN для мандрівників. "
-            "Покажи як ця функція допомагає мандрівнику в реальній подорожі."
+            "Покажи як ця функція допомагає мандрівнику в РЕАЛЬНІЙ подорожній ситуації. "
+            "Прив'яжи функцію до сьогоднішньої подорожньої теми (якщо вказана)."
         ),
     }
     hint = type_hints.get(content_type, "цікаву тему для мандрівників прив'язану до конкретного місця")
@@ -408,7 +427,7 @@ async def generate_unique_topic(
                 "content": (
                     f"Напрямок: {direction}\n"
                     f"Потрібно придумати: {hint}\n"
-                    f"Мова: українська{recent_block}\n\n"
+                    f"Мова: українська{context_block}{recent_block}\n\n"
                     "Згенеруй одну конкретну, цікаву тему у цьому напрямку, "
                     "яка відрізняється від усіх перерахованих вище. "
                     "Тема повинна бути прив'язана до конкретного місця!"
