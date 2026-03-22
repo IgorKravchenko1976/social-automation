@@ -24,13 +24,16 @@ async def sync_blog_to_vps() -> int:
     if not generated:
         return 0
 
+    blog_dir = _blog_dir()
+    thumbs = list(blog_dir.glob("thumb-*.jpg"))
+    all_files = list(set(generated + thumbs))
+
     has_creds = settings.vps_ssh_host and (settings.vps_ssh_password or settings.vps_ssh_key)
     if not has_creds:
-        logger.info("VPS SSH not configured — blog pages saved locally only (%s)",
-                     _blog_dir())
-        return len(generated)
+        logger.info("VPS SSH not configured — blog pages saved locally only (%s)", blog_dir)
+        return len(all_files)
 
-    pushed = _sftp_push(generated)
+    pushed = _sftp_push(all_files)
     return pushed
 
 

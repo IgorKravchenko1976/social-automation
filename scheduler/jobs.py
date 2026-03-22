@@ -367,10 +367,10 @@ async def publish_scheduled_post(time_slot: int) -> None:
         await session.commit()
 
         try:
-            from content.blog_generator import generate_post_html
-            from pathlib import Path as _Path
-            _base = settings.webhook_base_url.rstrip("/")
-            _img_url = f"{_base}/api/media/{_Path(post.image_path).name}" if post.image_path else None
+            from content.blog_generator import generate_post_html, save_thumbnail
+            _thumb_url = None
+            if post.image_path:
+                _thumb_url = save_thumbnail(post.id, post.image_path)
             _pub_at = next(
                 (p.published_at for p in publications if p.status == PostStatus.PUBLISHED),
                 None,
@@ -378,7 +378,7 @@ async def publish_scheduled_post(time_slot: int) -> None:
             generate_post_html(
                 post_id=post.id, title=post.title or "",
                 content=post.content_raw or "", published_at=_pub_at,
-                image_url=_img_url, source_url=post.source_url,
+                image_url=_thumb_url, source_url=post.source_url,
                 latitude=post.latitude, longitude=post.longitude,
                 place_name=post.place_name,
             )

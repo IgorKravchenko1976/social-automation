@@ -3,6 +3,7 @@
 After a post is published on platforms, this module produces:
 - blog/post-{id}.html  — full SEO-ready page for each post
 - blog/posts.json      — index used by blog.html to list posts
+- blog/thumb-{id}.jpg  — small thumbnail saved before media cleanup
 """
 from __future__ import annotations
 
@@ -19,12 +20,56 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = "https://www.im-in.net"
 BLOG_DIR_NAME = "blog"
+THUMB_SIZE = (120, 120)
+THUMB_QUALITY = 75
 
 
 def _blog_dir() -> Path:
     d = Path(settings.data_dir) / BLOG_DIR_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def save_thumbnail(post_id: int, image_path: str) -> Optional[str]:
+    """Create a small JPEG thumbnail from the original image before it's deleted.
+
+    Returns the relative URL suitable for use in blog HTML/JSON
+    (e.g. ``blog/thumb-42.jpg`` — relative to blog.html on VPS),
+    or ``None`` if the source image can't be read.
+    """
+    src = Path(image_path)
+    if not src.is_file():
+        logger.warning("Thumbnail source missing: %s", src)
+        return None
+
+    try:
+        from PIL import Image
+        img = Image.open(src)
+        img = img.convert("RGB")
+
+        w, h = img.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+        img = img.resize(THUMB_SIZE, Image.LANCZOS)
+
+        thumb_name = f"thumb-{post_id}.jpg"
+        thumb_path = _blog_dir() / thumb_name
+        img.save(thumb_path, "JPEG", quality=THUMB_QUALITY, optimize=True)
+        logger.info("Saved thumbnail %s (%dx%d)", thumb_name, *THUMB_SIZE)
+        return f"blog/{thumb_name}"
+    except Exception:
+        logger.warning("Failed to create thumbnail for post %d", post_id, exc_info=True)
+        return None
+
+
+def _thumb_url_if_exists(post_id: int) -> Optional[str]:
+    """Return relative thumbnail URL if the file already exists on disk."""
+    thumb = _blog_dir() / f"thumb-{post_id}.jpg"
+    if thumb.is_file():
+        return f"blog/thumb-{post_id}.jpg"
+    return None
 
 
 def _map_url(lat: float, lon: float, name: str = "") -> str:
@@ -75,7 +120,10 @@ def generate_post_html(
     date_iso = _fmt_date(published_at)
     date_human = _fmt_date_human(published_at)
     canonical = f"{SITE_URL}/blog/post-{post_id}.html"
-    og_image = image_url or f"{SITE_URL}/logo-imin.png"
+    if image_url and not image_url.startswith("http"):
+        og_image = f"{SITE_URL}/{image_url}"
+    else:
+        og_image = image_url or f"{SITE_URL}/logo-imin.png"
     description = escape((content or "")[:160].replace("\n", " "))
 
     geo_html = ""
@@ -108,7 +156,10 @@ def generate_post_html(
 
     image_html = ""
     if image_url:
-        image_html = f'<img class="post-hero" src="{escape(image_url)}" alt="{safe_title}" loading="lazy" onerror="this.style.display=\'none\'">'
+        img_src = image_url
+        if img_src.startswith("blog/"):
+            img_src = img_src[len("blog/"):]
+        image_html = f'<img class="post-hero" src="{escape(img_src)}" alt="{safe_title}" loading="lazy" onerror="this.style.display=\'none\'">'
 
     html = f"""<!DOCTYPE html>
 <html lang="uk">
@@ -297,15 +348,11 @@ async def generate_all_published() -> list[Path]:
         logger.info("No published posts — nothing to generate")
         return []
 
-    base_url = settings.webhook_base_url.rstrip("/")
     generated: list[Path] = []
     index_entries: list[dict] = []
 
     for post, published_at in rows:
-        image_url = None
-        if post.image_path:
-            fname = Path(post.image_path).name
-            image_url = f"{base_url}/api/media/{fname}"
+        image_url = _thumb_url_if_exists(post.id)
 
         page = generate_post_html(
             post_id=post.id,
