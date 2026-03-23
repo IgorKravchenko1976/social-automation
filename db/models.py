@@ -78,6 +78,7 @@ class Message(Base):
     thread_id = Column(String(500), nullable=True)
     category = Column(String(50), nullable=True)  # faq, support, spam, human_needed
     replied = Column(Boolean, default=False)
+    view_count = Column(Integer, default=0)
     created_at = Column(DateTime, server_default=func.now())
 
 

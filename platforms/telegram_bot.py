@@ -24,20 +24,36 @@ async def _track_channel_post(post: dict) -> None:
     text = post.get("text") or post.get("caption") or ""
     message_id = post.get("message_id")
     chat = post.get("chat", {})
+    views = post.get("views", 0) or 0
 
-    logger.info("Channel post #%s in %s: %s", message_id, chat.get("title", "?"), text[:60])
+    logger.info("Channel post #%s in %s (views=%d): %s",
+                message_id, chat.get("title", "?"), views, text[:60])
 
     try:
         async with async_session() as session:
-            session.add(MsgModel(
-                platform="telegram",
-                platform_message_id=str(message_id) if message_id else None,
-                sender_id="channel",
-                sender_name=chat.get("title", "channel"),
-                direction=MessageDirection.OUTGOING,
-                text=text[:500] if text else None,
-                category="channel_post",
-            ))
+            from sqlalchemy import select
+            existing = await session.execute(
+                select(MsgModel).where(
+                    MsgModel.platform == "telegram",
+                    MsgModel.platform_message_id == str(message_id),
+                    MsgModel.category == "channel_post",
+                )
+            )
+            msg = existing.scalar_one_or_none()
+            if msg:
+                if views > (msg.view_count or 0):
+                    msg.view_count = views
+            else:
+                session.add(MsgModel(
+                    platform="telegram",
+                    platform_message_id=str(message_id) if message_id else None,
+                    sender_id="channel",
+                    sender_name=chat.get("title", "channel"),
+                    direction=MessageDirection.OUTGOING,
+                    text=text[:500] if text else None,
+                    category="channel_post",
+                    view_count=views,
+                ))
             await session.commit()
     except Exception:
         logger.exception("Failed to save channel post to DB")

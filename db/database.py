@@ -41,6 +41,7 @@ async def _run_migrations(conn) -> None:
         ("posts", "translations", "TEXT"),
         ("posts", "source_published_at", "DATETIME"),
         ("messages", "thread_id", "VARCHAR(500)"),
+        ("messages", "view_count", "INTEGER DEFAULT 0"),
     ]
     for table, col, col_type in _alters:
         try:

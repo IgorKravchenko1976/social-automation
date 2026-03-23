@@ -55,7 +55,6 @@ async def _collect_telegram(date_str: str) -> dict:
 
     client = await _http_client()
 
-    # Subscribers
     try:
         resp = await client.post(_tg_url("getChatMemberCount"),
                                   json={"chat_id": settings.telegram_channel_id})
@@ -66,7 +65,6 @@ async def _collect_telegram(date_str: str) -> dict:
         logger.exception("Failed to get Telegram subscriber count")
 
     async with async_session() as session:
-        # Posts = channel_post entries (includes manual posts from the channel)
         result = await session.execute(
             select(sa_func.count(Message.id)).where(
                 Message.platform == Platform.TELEGRAM.value,
@@ -76,7 +74,6 @@ async def _collect_telegram(date_str: str) -> dict:
         )
         posts_from_channel = result.scalar() or 0
 
-        # Also count our own scheduler publications
         result = await session.execute(
             select(sa_func.count(Publication.id)).where(
                 Publication.platform == Platform.TELEGRAM.value,
@@ -87,7 +84,6 @@ async def _collect_telegram(date_str: str) -> dict:
         posts_from_scheduler = result.scalar() or 0
         stats["posts"] = max(posts_from_channel, posts_from_scheduler)
 
-        # Comments = discussion group messages (category="comment")
         result = await session.execute(
             select(sa_func.count(Message.id)).where(
                 Message.platform == Platform.TELEGRAM.value,
@@ -97,7 +93,17 @@ async def _collect_telegram(date_str: str) -> dict:
         )
         stats["comments"] = result.scalar() or 0
 
-    # Emoji reactions (all emojis classified into positive/negative)
+    # Telegram views: aggregate from stored channel_post updates
+    async with async_session() as session:
+        result = await session.execute(
+            select(sa_func.coalesce(sa_func.sum(Message.view_count), 0)).where(
+                Message.platform == Platform.TELEGRAM.value,
+                Message.category == "channel_post",
+                sa_func.date(Message.created_at) == date_str,
+            )
+        )
+        stats["views"] = result.scalar() or 0
+
     pos, neg = await _collect_reactions(Platform.TELEGRAM.value, date_str)
     stats["likes"] = pos
     stats["dislikes"] = neg
@@ -144,11 +150,17 @@ async def _collect_facebook(date_str: str) -> dict:
         stats["posts"] = result.scalar() or 0
 
     try:
+        from datetime import datetime, timedelta
+        dt_date = datetime.strptime(date_str, "%Y-%m-%d")
+        since_ts = int(dt_date.timestamp())
+        until_ts = int((dt_date + timedelta(days=1)).timestamp())
         resp = await client.get(
             f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/insights",
             params={
                 "metric": "page_impressions_unique",
                 "period": "day",
+                "since": since_ts,
+                "until": until_ts,
                 "access_token": token,
             },
         )
@@ -157,8 +169,11 @@ async def _collect_facebook(date_str: str) -> dict:
             values = data["data"][0].get("values", [])
             if values:
                 stats["views"] = values[-1].get("value", 0)
+                logger.info("Facebook page views for %s: %d", date_str, stats["views"])
+        elif "error" in data:
+            logger.warning("Facebook Insights error: %s", data["error"].get("message", ""))
     except Exception:
-        logger.debug("Facebook page impressions not available")
+        logger.warning("Facebook page impressions not available", exc_info=True)
 
     pos, neg = await _collect_reactions(Platform.FACEBOOK.value, date_str)
     stats["likes"] = pos
@@ -211,6 +226,26 @@ async def _collect_instagram(date_str: str) -> dict:
             )
         )
         stats["posts"] = result.scalar() or 0
+
+    try:
+        resp = await client.get(
+            f"{FACEBOOK_GRAPH_API}/{settings.instagram_user_id}/insights",
+            params={
+                "metric": "impressions",
+                "period": "day",
+                "access_token": token,
+            },
+        )
+        data = resp.json()
+        if "data" in data and data["data"]:
+            values = data["data"][0].get("values", [])
+            if values:
+                stats["views"] = values[-1].get("value", 0)
+                logger.info("Instagram impressions: %d", stats["views"])
+        elif "error" in data:
+            logger.debug("Instagram Insights: %s", data["error"].get("message", ""))
+    except Exception:
+        logger.debug("Instagram impressions not available")
 
     pos, neg = await _collect_reactions(Platform.INSTAGRAM.value, date_str)
     stats["likes"] = pos
