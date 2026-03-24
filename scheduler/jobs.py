@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from datetime import datetime, timezone
@@ -31,6 +32,8 @@ logger.info("Active platforms: %s", [p.value for p in ALL_PLATFORMS])
 
 MAX_RETRIES = 3
 
+_publish_lock = asyncio.Lock()
+
 
 async def ensure_daily_posts_exist() -> None:
     """Log today's post status. Posts are created fresh before each slot."""
@@ -52,41 +55,35 @@ async def ensure_daily_posts_exist() -> None:
 async def publish_missed_slots() -> None:
     """Publish posts for time slots that were missed (e.g. after a restart).
 
-    For each past time slot today, counts how many posts were already published
-    today. If fewer than expected for past slots, creates and publishes fresh ones.
+    For each past time slot today, re-checks how many posts were already
+    published to avoid duplicates (uses the same lock as scheduled publishing).
     """
     now_local = get_now_local()
-    today_start_utc = get_today_start_utc()
 
-    async with async_session() as session:
-        result = await session.execute(
-            select(sa_func.count(Post.id))
-            .where(Post.created_at >= today_start_utc)
-            .join(Publication)
-            .where(Publication.status == PostStatus.PUBLISHED)
-        )
-        published_today = result.scalar() or 0
-
-    slots_that_should_have_run = 0
+    past_slots: list[int] = []
     for idx, time_str in enumerate(settings.post_schedule):
         slot_time = parse_slot_time(time_str, now_local)
         if now_local > slot_time:
-            slots_that_should_have_run += 1
+            past_slots.append(idx)
 
-    missed = slots_that_should_have_run - published_today
-    if missed > 0:
-        logger.info("=== CATCHUP === %d missed slot(s), publishing now", missed)
-        for i in range(missed):
-            slot_idx = published_today + i
-            if slot_idx >= len(settings.post_schedule):
-                break
-            try:
-                await publish_scheduled_post(slot_idx)
-            except Exception:
-                logger.exception("Error publishing missed slot %d", slot_idx)
-    else:
-        logger.info("=== CATCHUP === No missed slots (published=%d, expected=%d)",
-                     published_today, slots_that_should_have_run)
+    if not past_slots:
+        logger.info("=== CATCHUP === No past slots yet today")
+        return
+
+    published_today = await _count_published_today()
+    missed = len(past_slots) - published_today
+
+    if missed <= 0:
+        logger.info("=== CATCHUP === No missed slots (published=%d, past_slots=%d)",
+                     published_today, len(past_slots))
+        return
+
+    logger.info("=== CATCHUP === %d missed slot(s) detected, publishing now", missed)
+    for slot_idx in past_slots:
+        try:
+            await publish_scheduled_post(slot_idx)
+        except Exception:
+            logger.exception("Error publishing missed slot %d", slot_idx)
 
 
 async def _get_recent_titles(session: AsyncSession, days: int = 60) -> list[str]:
@@ -385,14 +382,45 @@ async def create_single_post(content_type: str) -> Optional[Post]:
         return post
 
 
+async def _count_published_today() -> int:
+    """Count distinct posts published today (across all platforms)."""
+    today_start_utc = get_today_start_utc()
+    async with async_session() as session:
+        result = await session.execute(
+            select(sa_func.count(sa_func.distinct(Post.id)))
+            .join(Publication)
+            .where(
+                Post.created_at >= today_start_utc,
+                Publication.status == PostStatus.PUBLISHED,
+            )
+        )
+        return result.scalar() or 0
+
+
 async def publish_scheduled_post(time_slot: int) -> None:
     """Create a FRESH post and publish it immediately.
 
     Each slot has a content type (news, active, leisure, feature).
     The post is created right before publishing for maximum freshness.
+    Uses a lock to prevent race conditions between cron and catchup.
     """
+    async with _publish_lock:
+        await _publish_scheduled_post_inner(time_slot)
+
+
+async def _publish_scheduled_post_inner(time_slot: int) -> None:
     content_type = SLOT_CONTENT_TYPES[time_slot] if time_slot < len(SLOT_CONTENT_TYPES) else "leisure_travel"
-    logger.info("=== PUBLISH === Slot %d: content_type=%s — creating fresh post", time_slot, content_type)
+
+    published_count = await _count_published_today()
+    if published_count > time_slot:
+        logger.info(
+            "=== PUBLISH === Slot %d SKIPPED: already %d post(s) published today (slot needs at most %d)",
+            time_slot, published_count, time_slot + 1,
+        )
+        return
+
+    logger.info("=== PUBLISH === Slot %d: content_type=%s, published_today=%d — creating fresh post",
+                time_slot, content_type, published_count)
 
     today_start_utc = get_today_start_utc()
 
