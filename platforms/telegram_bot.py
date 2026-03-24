@@ -287,7 +287,7 @@ async def polling_loop() -> None:
         try:
             params: dict = {
                 "timeout": 30,
-                "allowed_updates": ["message", "channel_post",
+                "allowed_updates": ["message", "channel_post", "edited_channel_post",
                                     "message_reaction", "message_reaction_count"],
             }
             if offset:
@@ -310,6 +310,8 @@ async def polling_loop() -> None:
                     await _track_reaction_individual(upd["message_reaction"])
                 elif upd.get("channel_post"):
                     await _track_channel_post(upd["channel_post"])
+                elif upd.get("edited_channel_post"):
+                    await _track_channel_post(upd["edited_channel_post"])
                 elif upd.get("message") and upd["message"].get("text"):
                     await _process_message(upd["message"])
 

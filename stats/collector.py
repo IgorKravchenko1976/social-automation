@@ -93,7 +93,8 @@ async def _collect_telegram(date_str: str) -> dict:
         )
         stats["comments"] = result.scalar() or 0
 
-    # Telegram views: aggregate from stored channel_post updates
+    # Telegram views: aggregate from stored channel_post updates + per-post forwarding refresh
+    await _refresh_telegram_views(date_str)
     async with async_session() as session:
         result = await session.execute(
             select(sa_func.coalesce(sa_func.sum(Message.view_count), 0)).where(
@@ -109,6 +110,79 @@ async def _collect_telegram(date_str: str) -> dict:
     stats["dislikes"] = neg
 
     return stats
+
+
+async def _refresh_telegram_views(date_str: str) -> None:
+    """Refresh view counts for channel posts by forwarding to discussion group.
+
+    The Bot API only provides view counts at the time of the initial update.
+    We forward each channel post to the linked discussion group, read the
+    forwarded message (which inherits the channel views counter), then delete it.
+    """
+    if not settings.telegram_bot_token or not settings.telegram_channel_id:
+        return
+
+    client = await _http_client()
+
+    try:
+        resp = await client.post(_tg_url("getChat"),
+                                  json={"chat_id": settings.telegram_channel_id})
+        chat_data = resp.json()
+        if not chat_data.get("ok"):
+            return
+        discussion_id = chat_data["result"].get("linked_chat_id")
+        if not discussion_id:
+            logger.debug("No discussion group linked to channel, skipping view refresh")
+            return
+    except Exception:
+        logger.warning("Cannot get discussion group for view refresh", exc_info=True)
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Message).where(
+                Message.platform == Platform.TELEGRAM.value,
+                Message.category == "channel_post",
+                sa_func.date(Message.created_at) == date_str,
+            )
+        )
+        posts = result.scalars().all()
+
+    refreshed = 0
+    for post in posts:
+        if not post.platform_message_id:
+            continue
+        try:
+            fwd_resp = await client.post(_tg_url("forwardMessage"), json={
+                "chat_id": discussion_id,
+                "from_chat_id": settings.telegram_channel_id,
+                "message_id": int(post.platform_message_id),
+                "disable_notification": True,
+            })
+            fwd_data = fwd_resp.json()
+            if not fwd_data.get("ok"):
+                continue
+
+            fwd_msg = fwd_data["result"]
+            views = fwd_msg.get("views", 0) or 0
+
+            await client.post(_tg_url("deleteMessage"), json={
+                "chat_id": discussion_id,
+                "message_id": fwd_msg["message_id"],
+            })
+
+            if views > (post.view_count or 0):
+                async with async_session() as session:
+                    msg = await session.get(Message, post.id)
+                    if msg:
+                        msg.view_count = views
+                        await session.commit()
+                        refreshed += 1
+        except Exception:
+            logger.debug("View refresh failed for post #%s", post.platform_message_id)
+
+    if refreshed:
+        logger.info("Refreshed Telegram views for %d posts on %s", refreshed, date_str)
 
 
 async def _collect_facebook(date_str: str) -> dict:
@@ -149,37 +223,80 @@ async def _collect_facebook(date_str: str) -> dict:
         )
         stats["posts"] = result.scalar() or 0
 
-    try:
-        from datetime import datetime, timedelta
-        dt_date = datetime.strptime(date_str, "%Y-%m-%d")
-        since_ts = int(dt_date.timestamp())
-        until_ts = int((dt_date + timedelta(days=1)).timestamp())
-        resp = await client.get(
-            f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/insights",
-            params={
-                "metric": "page_impressions_unique",
-                "period": "day",
-                "since": since_ts,
-                "until": until_ts,
-                "access_token": token,
-            },
-        )
-        data = resp.json()
-        if "data" in data and data["data"]:
-            values = data["data"][0].get("values", [])
-            if values:
-                stats["views"] = values[-1].get("value", 0)
-                logger.info("Facebook page views for %s: %d", date_str, stats["views"])
-        elif "error" in data:
-            logger.warning("Facebook Insights error: %s", data["error"].get("message", ""))
-    except Exception:
-        logger.warning("Facebook page impressions not available", exc_info=True)
+    stats["views"] = await _collect_facebook_post_views(date_str, token)
 
     pos, neg = await _collect_reactions(Platform.FACEBOOK.value, date_str)
     stats["likes"] = pos
     stats["dislikes"] = neg
 
     return stats
+
+
+async def _collect_facebook_post_views(date_str: str, token: str) -> int:
+    """Sum impressions from individual Facebook posts published today."""
+    total_views = 0
+    client = await _http_client()
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Publication.platform_post_id).where(
+                Publication.platform == Platform.FACEBOOK.value,
+                Publication.status == PostStatus.PUBLISHED,
+                sa_func.date(Publication.published_at) == date_str,
+                Publication.platform_post_id.isnot(None),
+            )
+        )
+        post_ids = [r[0] for r in result.all()]
+
+    for post_id in post_ids:
+        try:
+            resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{post_id}/insights",
+                params={
+                    "metric": "post_impressions",
+                    "access_token": token,
+                },
+            )
+            data = resp.json()
+            if "data" in data and data["data"]:
+                values = data["data"][0].get("values", [])
+                if values:
+                    views = values[-1].get("value", 0)
+                    total_views += views
+            elif "error" in data:
+                err_msg = data["error"].get("message", "")
+                if "Unsupported request" not in err_msg:
+                    logger.warning("Facebook post insights error for %s: %s", post_id, err_msg)
+        except Exception:
+            logger.debug("Failed to get insights for FB post %s", post_id)
+
+    if not post_ids:
+        try:
+            from datetime import datetime as _dt, timedelta
+            dt_date = _dt.strptime(date_str, "%Y-%m-%d")
+            since_ts = int(dt_date.timestamp())
+            until_ts = int((dt_date + timedelta(days=1)).timestamp())
+            resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/insights",
+                params={
+                    "metric": "page_impressions_unique",
+                    "period": "day",
+                    "since": since_ts,
+                    "until": until_ts,
+                    "access_token": token,
+                },
+            )
+            data = resp.json()
+            if "data" in data and data["data"]:
+                values = data["data"][0].get("values", [])
+                if values:
+                    total_views = values[-1].get("value", 0)
+        except Exception:
+            pass
+
+    if total_views:
+        logger.info("Facebook views for %s: %d (from %d posts)", date_str, total_views, len(post_ids))
+    return total_views
 
 
 async def _collect_instagram(date_str: str) -> dict:
@@ -227,31 +344,58 @@ async def _collect_instagram(date_str: str) -> dict:
         )
         stats["posts"] = result.scalar() or 0
 
-    try:
-        resp = await client.get(
-            f"{FACEBOOK_GRAPH_API}/{settings.instagram_user_id}/insights",
-            params={
-                "metric": "impressions",
-                "period": "day",
-                "access_token": token,
-            },
-        )
-        data = resp.json()
-        if "data" in data and data["data"]:
-            values = data["data"][0].get("values", [])
-            if values:
-                stats["views"] = values[-1].get("value", 0)
-                logger.info("Instagram impressions: %d", stats["views"])
-        elif "error" in data:
-            logger.debug("Instagram Insights: %s", data["error"].get("message", ""))
-    except Exception:
-        logger.debug("Instagram impressions not available")
+    stats["views"] = await _collect_instagram_post_views(date_str, token)
 
     pos, neg = await _collect_reactions(Platform.INSTAGRAM.value, date_str)
     stats["likes"] = pos
     stats["dislikes"] = neg
 
     return stats
+
+
+async def _collect_instagram_post_views(date_str: str, token: str) -> int:
+    """Sum impressions from individual Instagram media published today."""
+    total_views = 0
+    client = await _http_client()
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Publication.platform_post_id).where(
+                Publication.platform == Platform.INSTAGRAM.value,
+                Publication.status == PostStatus.PUBLISHED,
+                sa_func.date(Publication.published_at) == date_str,
+                Publication.platform_post_id.isnot(None),
+            )
+        )
+        post_ids = [r[0] for r in result.all()]
+
+    for media_id in post_ids:
+        try:
+            resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{media_id}/insights",
+                params={
+                    "metric": "impressions,reach",
+                    "access_token": token,
+                },
+            )
+            data = resp.json()
+            if "data" in data:
+                for metric in data["data"]:
+                    if metric.get("name") == "impressions":
+                        values = metric.get("values", [])
+                        if values:
+                            total_views += values[0].get("value", 0)
+                        break
+            elif "error" in data:
+                err = data["error"].get("message", "")
+                if "not available" not in err.lower():
+                    logger.debug("Instagram media insights error for %s: %s", media_id, err)
+        except Exception:
+            logger.debug("Failed to get insights for IG media %s", media_id)
+
+    if total_views:
+        logger.info("Instagram views for %s: %d (from %d posts)", date_str, total_views, len(post_ids))
+    return total_views
 
 
 async def _collect_placeholder(platform: Platform, date_str: str) -> dict:
