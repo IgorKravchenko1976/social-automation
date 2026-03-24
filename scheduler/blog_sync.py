@@ -52,9 +52,12 @@ def _fetch_website_files() -> list[Path]:
     """Download latest website files from GitHub and return local paths."""
     import tempfile, httpx
     base = "https://raw.githubusercontent.com/IgorKravchenko1976/im-in-website/main"
-    files_to_sync = ["blog.html", "index.html", "robots.txt", "sitemap.xml",
-                     "terms.html", "privacy.html", "404.html",
-                     "translations.js", "styles.css", "manifest.json"]
+    files_to_sync = [
+        "blog.html", "index.html", "robots.txt",
+        "terms.html", "privacy.html", "404.html",
+        "translations.js", "styles.css", "manifest.json",
+        "script.js", "favicon.svg",
+    ]
     result = []
     tmp_dir = Path(tempfile.mkdtemp(prefix="vps_sync_"))
     for fname in files_to_sync:
