@@ -152,12 +152,30 @@ async def respond_to_pending_messages() -> int:
 async def _find_post_context(session: AsyncSession, msg: Message) -> str:
     """Try to find the original post content for a comment/reply.
 
-    Looks for the most recent published post on the same platform
-    (within the last day) as a likely context for the comment.
+    Uses thread_id to match the exact post when available (Facebook: fb_post_PAGEID_POSTID,
+    Telegram: post_MSGID). Falls back to the most recent published post on the same
+    platform within the last 3 days.
     """
     try:
-        from config.settings import get_today_start_utc
-        today = get_today_start_utc()
+        from datetime import timedelta, datetime, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+
+        thread = msg.thread_id or ""
+
+        if thread.startswith("fb_post_") and "_" in thread:
+            fb_post_id = thread.removeprefix("fb_post_")
+            result = await session.execute(
+                select(Post)
+                .join(Publication)
+                .where(
+                    Publication.platform == msg.platform,
+                    Publication.platform_post_id == fb_post_id,
+                )
+                .limit(1)
+            )
+            post = result.scalar_one_or_none()
+            if post:
+                return _format_post_context(post)
 
         result = await session.execute(
             select(Post)
@@ -165,28 +183,32 @@ async def _find_post_context(session: AsyncSession, msg: Message) -> str:
             .where(
                 Publication.platform == msg.platform,
                 Publication.status == "published",
-                Post.created_at >= today,
+                Post.created_at >= cutoff,
             )
             .order_by(Publication.published_at.desc())
             .limit(1)
         )
         post = result.scalar_one_or_none()
         if post:
-            parts = []
-            if post.source_published_at:
-                parts.append(f"Дата джерела: {post.source_published_at.strftime('%d.%m.%Y')}")
-            elif post.source == "ai":
-                parts.append("Тип поста: авторський (без зовнішнього джерела, без конкретної дати)")
-            if post.title:
-                parts.append(post.title)
-            if post.content_raw:
-                parts.append(post.content_raw[:1000])
-            if post.source_url:
-                parts.append(f"Посилання на джерело: {post.source_url}")
-            return "\n".join(parts)
+            return _format_post_context(post)
     except Exception:
         logger.warning("Could not find post context for msg_id=%s", msg.id)
     return ""
+
+
+def _format_post_context(post: Post) -> str:
+    parts = []
+    if post.source_published_at:
+        parts.append(f"Дата джерела: {post.source_published_at.strftime('%d.%m.%Y')}")
+    elif post.source == "ai":
+        parts.append("Тип поста: авторський (без зовнішнього джерела, без конкретної дати)")
+    if post.title:
+        parts.append(post.title)
+    if post.content_raw:
+        parts.append(post.content_raw[:1500])
+    if post.source_url:
+        parts.append(f"Посилання на джерело: {post.source_url}")
+    return "\n".join(parts)
 
 
 async def _notify_admin(msg: Message) -> None:

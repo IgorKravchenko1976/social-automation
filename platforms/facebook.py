@@ -85,8 +85,8 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
                     f"{GRAPH_API_BASE}/{settings.facebook_page_id}/feed",
                     params={
                         "access_token": self._token,
-                        "fields": "id,comments{id,from,message,created_time}",
-                        "limit": 5,
+                        "fields": "id,comments.limit(50){id,from,message,created_time}",
+                        "limit": 10,
                     },
                 )
                 data = resp.json()
@@ -96,12 +96,14 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
 
                 messages = []
                 for post in data.get("data", []):
+                    post_id = post.get("id", "")
                     for comment in post.get("comments", {}).get("data", []):
                         messages.append({
                             "platform_message_id": comment["id"],
                             "sender_id": comment.get("from", {}).get("id", ""),
                             "sender_name": comment.get("from", {}).get("name", ""),
                             "text": comment.get("message", ""),
+                            "thread_id": f"fb_post_{post_id}",
                         })
                 return messages
         except Exception:

@@ -41,6 +41,7 @@ async def poll_all_messages() -> list[Message]:
                         sender_name=raw.get("sender_name", ""),
                         direction=MessageDirection.INCOMING,
                         text=raw.get("text", ""),
+                        thread_id=raw.get("thread_id"),
                         replied=False,
                     )
                     session.add(msg)

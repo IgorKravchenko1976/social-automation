@@ -153,6 +153,19 @@ async def _process_message(message: dict) -> None:
             )
 
         if category == "spam":
+            logger.info("Telegram message from %s classified as spam, marking replied", sender_name)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(MsgModel).where(
+                        MsgModel.platform == "telegram",
+                        MsgModel.platform_message_id == str(message_id),
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if row:
+                    row.replied = True
+                    row.category = "spam"
+                    await session.commit()
             return
 
         await tg_request("sendMessage", chat_id=chat_id, text=reply_text, reply_to_message_id=message_id)
