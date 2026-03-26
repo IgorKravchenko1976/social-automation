@@ -561,6 +561,140 @@ async def public_messages_status():
     ]
 
 
+_telethon_state: dict = {}
+
+
+@public_router.get("/telethon/setup")
+async def telethon_setup_page():
+    """Interactive HTML page for Telethon session generation."""
+    from fastapi.responses import HTMLResponse
+    html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Telethon Setup</title>
+    <style>body{font-family:sans-serif;max-width:500px;margin:40px auto;padding:20px}
+    input,button{font-size:16px;padding:8px 12px;margin:5px 0}input{width:100%;box-sizing:border-box}
+    button{background:#2AABEE;color:#fff;border:none;border-radius:4px;cursor:pointer;width:100%}
+    button:hover{background:#1a9ada}.msg{padding:10px;margin:10px 0;border-radius:4px}
+    .ok{background:#d4edda;color:#155724}.err{background:#f8d7da;color:#721c24}
+    .session{word-break:break-all;background:#f0f0f0;padding:10px;font-family:monospace;font-size:12px}
+    h1{color:#2AABEE}#step2{display:none}</style></head><body>
+    <h1>Telethon Session Setup</h1>
+    <div id="step1">
+    <p>Крок 1: Введіть номер телефону у форматі +380XXXXXXXXX</p>
+    <input id="phone" placeholder="+380504401477" value="+380504401477">
+    <button onclick="sendCode()">Надіслати код</button>
+    <div id="msg1"></div></div>
+    <div id="step2">
+    <p>Крок 2: Введіть 5-значний код з Telegram</p>
+    <input id="code" placeholder="12345" maxlength="10">
+    <input id="password" placeholder="2FA пароль (якщо є)" style="display:none">
+    <button onclick="signIn()">Увійти</button>
+    <div id="msg2"></div></div>
+    <script>
+    async function sendCode(){
+      const phone=document.getElementById('phone').value.trim();
+      document.getElementById('msg1').innerHTML='<div class="msg">Надсилаю код...</div>';
+      try{
+        const r=await fetch('/api/telethon/send-code?phone='+encodeURIComponent(phone));
+        const d=await r.json();
+        if(d.ok){
+          document.getElementById('msg1').innerHTML='<div class="msg ok">Код надіслано! Перевірте Telegram.</div>';
+          document.getElementById('step2').style.display='block';
+        }else{
+          document.getElementById('msg1').innerHTML='<div class="msg err">Помилка: '+d.error+'</div>';
+        }
+      }catch(e){document.getElementById('msg1').innerHTML='<div class="msg err">'+e+'</div>';}
+    }
+    async function signIn(){
+      const phone=document.getElementById('phone').value.trim();
+      const code=document.getElementById('code').value.trim();
+      const pw=document.getElementById('password').value.trim();
+      document.getElementById('msg2').innerHTML='<div class="msg">Перевіряю код...</div>';
+      try{
+        let url='/api/telethon/sign-in?phone='+encodeURIComponent(phone)+'&code='+encodeURIComponent(code);
+        if(pw)url+='&password='+encodeURIComponent(pw);
+        const r=await fetch(url);
+        const d=await r.json();
+        if(d.ok){
+          document.getElementById('msg2').innerHTML='<div class="msg ok">Сесію створено і збережено! Перегляди Telegram тепер будуть працювати.<br><br>Session:<div class="session">'+d.session+'</div></div>';
+        }else if(d.need_2fa){
+          document.getElementById('password').style.display='block';
+          document.getElementById('msg2').innerHTML='<div class="msg err">Потрібен 2FA пароль. Введіть його вище.</div>';
+        }else{
+          document.getElementById('msg2').innerHTML='<div class="msg err">Помилка: '+d.error+'</div>';
+        }
+      }catch(e){document.getElementById('msg2').innerHTML='<div class="msg err">'+e+'</div>';}
+    }
+    </script></body></html>"""
+    return HTMLResponse(html)
+
+
+@public_router.get("/telethon/send-code")
+async def telethon_send_code(phone: str):
+    """Send Telegram verification code to the phone number."""
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    api_id = settings.telegram_api_id
+    api_hash = settings.telegram_api_hash
+    if not api_id or not api_hash:
+        return {"ok": False, "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH not configured on Railway"}
+
+    try:
+        client = TelegramClient(StringSession(), int(api_id), api_hash)
+        await client.connect()
+        result = await client.send_code_request(phone)
+        _telethon_state["client"] = client
+        _telethon_state["phone"] = phone
+        _telethon_state["phone_code_hash"] = result.phone_code_hash
+        return {"ok": True, "message": "Code sent to Telegram"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@public_router.get("/telethon/sign-in")
+async def telethon_sign_in(phone: str, code: str, password: str = ""):
+    """Complete Telethon sign-in with the verification code."""
+    from telethon.errors import SessionPasswordNeededError
+
+    client = _telethon_state.get("client")
+    phone_code_hash = _telethon_state.get("phone_code_hash")
+
+    if not client or not phone_code_hash:
+        return {"ok": False, "error": "No pending session. Send code first."}
+
+    try:
+        await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+    except SessionPasswordNeededError:
+        if not password:
+            return {"ok": False, "need_2fa": True, "error": "2FA password required"}
+        try:
+            await client.sign_in(password=password)
+        except Exception as e:
+            return {"ok": False, "error": f"2FA failed: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    session_string = client.session.save()
+    await client.disconnect()
+    _telethon_state.clear()
+
+    from db.database import async_session as _async_session
+    from db.models import KVStore
+    from sqlalchemy import select
+
+    async with _async_session() as session:
+        result = await session.execute(
+            select(KVStore).where(KVStore.key == "telegram_session")
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.value = session_string
+        else:
+            session.add(KVStore(key="telegram_session", value=session_string))
+        await session.commit()
+
+    return {"ok": True, "session": session_string, "message": "Session saved to DB!"}
+
+
 @public_router.get("/debug/test-views")
 async def debug_test_views():
     """Test view/impression collection from all platform APIs — shows raw responses."""

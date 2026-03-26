@@ -411,13 +411,35 @@ async def _collect_instagram_post_views(date_str: str, token: str) -> int:
     return engagement_total
 
 
+async def _get_telethon_session() -> str | None:
+    """Get Telethon session string: try DB first, then env var."""
+    if settings.telegram_session:
+        return settings.telegram_session
+    try:
+        from db.models import KVStore
+        async with async_session() as session:
+            from sqlalchemy import select as _sel
+            result = await session.execute(
+                _sel(KVStore).where(KVStore.key == "telegram_session")
+            )
+            row = result.scalar_one_or_none()
+            if row and row.value:
+                return row.value
+    except Exception:
+        pass
+    return None
+
+
 async def _refresh_telegram_views_telethon(date_str: str) -> None:
     """Use Telethon Client API to get real view counts for today's channel posts.
 
-    Requires TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_SESSION env vars.
+    Requires TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_SESSION (env or DB).
     If not configured, silently skips (Bot API fallback: initial view_count from DB).
     """
-    if not settings.telegram_api_id or not settings.telegram_api_hash or not settings.telegram_session:
+    if not settings.telegram_api_id or not settings.telegram_api_hash:
+        return
+    session_str = await _get_telethon_session()
+    if not session_str:
         return
 
     try:
@@ -446,7 +468,7 @@ async def _refresh_telegram_views_telethon(date_str: str) -> None:
 
     try:
         client = TelegramClient(
-            StringSession(settings.telegram_session),
+            StringSession(session_str),
             int(settings.telegram_api_id),
             settings.telegram_api_hash,
         )
