@@ -145,12 +145,25 @@ async def _renew_facebook() -> bool:
 
 
 async def _renew_instagram() -> bool:
-    """Refresh the Instagram long-lived token (valid for 60 days, refreshable).
+    """Sync Instagram token from Facebook (they share the same Page Access Token for Business API).
 
-    Instagram API tokens can be refreshed via:
-    GET https://graph.instagram.com/refresh_access_token
-        ?grant_type=ig_refresh_token&access_token={token}
+    For Instagram Business accounts connected via Facebook Page, the Facebook Page
+    Access Token is used for all Instagram Graph API calls. So we just copy the
+    Facebook token to the Instagram slot.
     """
+    fb_token = await get_active_token("facebook")
+    if fb_token:
+        async with async_session() as session:
+            result = await session.execute(
+                select(TokenStore).where(TokenStore.platform == "facebook")
+            )
+            fb_row = result.scalar_one_or_none()
+            fb_expires = fb_row.expires_at if fb_row else None
+
+        await _save_token("instagram", fb_token, fb_expires)
+        logger.info("Instagram token synced from Facebook token")
+        return True
+
     current_token = await get_active_token("instagram")
     if not current_token:
         current_token = settings.instagram_access_token
@@ -206,7 +219,7 @@ async def renew_all_tokens() -> dict[str, bool]:
 
     ig_token = settings.instagram_access_token
     ig_db = await get_active_token("instagram")
-    if ig_token or ig_db:
+    if ig_token or ig_db or results.get("facebook"):
         results["instagram"] = await _renew_instagram()
 
     return results
@@ -235,11 +248,22 @@ async def seed_tokens_from_env() -> None:
             except Exception:
                 logger.exception("Failed to seed Facebook token")
 
-    # Instagram
+    # Instagram — use dedicated token if available, otherwise copy from Facebook
     ig_token = settings.instagram_access_token
-    if ig_token:
-        existing = await get_active_token("instagram")
-        if not existing:
+    existing_ig = await get_active_token("instagram")
+    if not existing_ig:
+        if ig_token and not is_placeholder(ig_token):
             expires_at = datetime.now(timezone.utc) + timedelta(days=60)
             await _save_token("instagram", ig_token, expires_at)
             logger.info("Seeded Instagram token to DB (expires: %s)", expires_at)
+        else:
+            fb_db_token = await get_active_token("facebook")
+            if fb_db_token:
+                async with async_session() as session:
+                    result = await session.execute(
+                        select(TokenStore).where(TokenStore.platform == "facebook")
+                    )
+                    fb_row = result.scalar_one_or_none()
+                    fb_expires = fb_row.expires_at if fb_row else None
+                await _save_token("instagram", fb_db_token, fb_expires)
+                logger.info("Seeded Instagram token from Facebook token")

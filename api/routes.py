@@ -628,7 +628,7 @@ async def debug_test_views():
                 try:
                     resp2 = await client.get(
                         f"{FACEBOOK_GRAPH_API}/{pid}",
-                        params={"fields": "shares,reactions.summary(total_count),comments.summary(total_count)", "access_token": token},
+                        params={"fields": "reactions.summary(total_count),comments.summary(total_count)", "access_token": token},
                     )
                     fb_info["insights_responses"].append({"post_id": pid, "engagement": resp2.json()})
                 except Exception as e:
@@ -647,9 +647,9 @@ async def debug_test_views():
 
         # --- Instagram ---
         ig_info = {"media_ids": [], "insights_responses": []}
-        if settings.instagram_user_id and settings.instagram_access_token:
-            from stats.token_renewer import get_active_token
-            token = await get_active_token("instagram") or settings.instagram_access_token
+        if settings.instagram_user_id:
+            from stats.collector import _get_instagram_token
+            token = await _get_instagram_token()
 
             async with _async_session() as session:
                 res = await session.execute(
@@ -667,7 +667,7 @@ async def debug_test_views():
                 try:
                     resp = await client.get(
                         f"{FACEBOOK_GRAPH_API}/{mid}/insights",
-                        params={"metric": "views,reach", "access_token": token},
+                        params={"metric": "impressions,reach", "access_token": token},
                     )
                     ig_info["insights_responses"].append({"media_id": mid, "data": resp.json()})
                 except Exception as e:

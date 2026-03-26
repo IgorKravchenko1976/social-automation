@@ -203,14 +203,14 @@ async def _collect_facebook_post_views(date_str: str, token: str) -> int:
         logger.info("Facebook views (post_impressions): %d", total_views)
         return total_views
 
-    # Strategy 2: per-post engagement (reactions + comments + shares)
+    # Strategy 2: per-post engagement (reactions + comments)
     engagement_total = 0
     for post_id in post_ids:
         try:
             resp = await client.get(
                 f"{FACEBOOK_GRAPH_API}/{post_id}",
                 params={
-                    "fields": "shares,reactions.summary(total_count),comments.summary(total_count)",
+                    "fields": "reactions.summary(total_count),comments.summary(total_count)",
                     "access_token": token,
                 },
             )
@@ -218,11 +218,10 @@ async def _collect_facebook_post_views(date_str: str, token: str) -> int:
             if "error" not in data:
                 reactions = data.get("reactions", {}).get("summary", {}).get("total_count", 0)
                 comments = data.get("comments", {}).get("summary", {}).get("total_count", 0)
-                shares = data.get("shares", {}).get("count", 0)
-                eng = reactions + comments + shares
+                eng = reactions + comments
                 engagement_total += eng
-                logger.info("Facebook post %s engagement: reactions=%d comments=%d shares=%d",
-                            post_id, reactions, comments, shares)
+                logger.info("Facebook post %s engagement: reactions=%d comments=%d",
+                            post_id, reactions, comments)
             else:
                 logger.warning("Facebook post engagement error for %s: %s",
                                post_id, data["error"].get("message", ""))
@@ -263,15 +262,30 @@ async def _collect_facebook_post_views(date_str: str, token: str) -> int:
     return total_views
 
 
+async def _get_instagram_token() -> str | None:
+    """Get working Instagram token: try instagram-specific first, then fall back to Facebook token."""
+    from stats.token_renewer import get_active_token
+    token = await get_active_token("instagram")
+    if token:
+        return token
+    if settings.instagram_access_token:
+        return settings.instagram_access_token
+    token = await get_active_token("facebook")
+    if token:
+        return token
+    return settings.facebook_page_access_token or None
+
+
 async def _collect_instagram(date_str: str) -> dict:
     """Fetch Instagram stats via Graph API + DB."""
     stats = EMPTY_STATS.copy()
 
-    if not settings.instagram_user_id or not settings.instagram_access_token:
+    if not settings.instagram_user_id:
         return stats
 
-    from stats.token_renewer import get_active_token
-    token = await get_active_token("instagram") or settings.instagram_access_token
+    token = await _get_instagram_token()
+    if not token:
+        return stats
 
     client = await _http_client()
 
@@ -335,22 +349,22 @@ async def _collect_instagram_post_views(date_str: str, token: str) -> int:
 
     logger.info("Instagram: %d published media today, collecting views...", len(post_ids))
 
-    # Strategy 1: per-media insights (views — replaced deprecated 'impressions' since April 2025)
+    # Strategy 1: per-media insights
     for media_id in post_ids:
         try:
             resp = await client.get(
                 f"{FACEBOOK_GRAPH_API}/{media_id}/insights",
-                params={"metric": "views,reach", "access_token": token},
+                params={"metric": "impressions,reach", "access_token": token},
             )
             data = resp.json()
             if "data" in data and data["data"]:
                 for metric in data["data"]:
-                    if metric.get("name") == "views":
+                    if metric.get("name") in ("impressions", "views"):
                         values = metric.get("values", [])
                         if values:
                             val = values[0].get("value", 0)
                             total_views += val
-                            logger.info("Instagram media %s views: %d", media_id, val)
+                            logger.info("Instagram media %s %s: %d", media_id, metric["name"], val)
                         break
             elif "error" in data:
                 logger.warning("Instagram insights error for %s: %s",
