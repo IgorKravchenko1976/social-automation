@@ -54,7 +54,8 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
             err = data["error"].get("message", str(data["error"]))
             logger.error("Facebook photo publish error: %s", err)
             return PublishResult(success=False, error=err)
-        return PublishResult(success=True, platform_post_id=data.get("id"))
+        post_id = data.get("post_id") or data.get("id")
+        return PublishResult(success=True, platform_post_id=post_id)
 
     async def publish_video(self, text: str, video_path: str) -> PublishResult:
         try:

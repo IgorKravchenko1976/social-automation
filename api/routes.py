@@ -612,8 +612,16 @@ async def debug_test_views():
                         Publication.platform_post_id.isnot(None),
                     )
                 )
-                post_ids = [r[0] for r in res.all()]
+                raw_ids = [r[0] for r in res.all()]
+            page_id = settings.facebook_page_id
+            post_ids = []
+            for pid in raw_ids:
+                if "_" not in pid and page_id:
+                    post_ids.append(f"{page_id}_{pid}")
+                else:
+                    post_ids.append(pid)
             fb_info["post_ids"] = post_ids
+            fb_info["raw_ids"] = raw_ids
 
             for pid in post_ids[:3]:
                 try:
