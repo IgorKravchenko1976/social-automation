@@ -47,11 +47,22 @@ def save_thumbnail(post_id: int, image_path: str) -> Optional[str]:
         img = Image.open(src)
         img = img.convert("RGB")
 
+        tw, th = THUMB_SIZE
         w, h = img.size
-        side = min(w, h)
-        left = (w - side) // 2
-        top = (h - side) // 2
-        img = img.crop((left, top, left + side, top + side))
+        target_ratio = tw / th
+        img_ratio = w / h
+
+        if img_ratio > target_ratio:
+            new_h = h
+            new_w = int(h * target_ratio)
+            left = (w - new_w) // 2
+            img = img.crop((left, 0, left + new_w, new_h))
+        else:
+            new_w = w
+            new_h = int(w / target_ratio)
+            top = (h - new_h) // 2
+            img = img.crop((0, top, new_w, top + new_h))
+
         img = img.resize(THUMB_SIZE, Image.LANCZOS)
 
         thumb_name = f"thumb-{post_id}.jpg"
@@ -335,7 +346,7 @@ def generate_post_html(
         .post-header a:hover {{ color: #fff; }}
         .post-header img {{ height: 32px; border-radius: 6px; }}
         .post-hero {{
-            width: 100px; height: 50px; object-fit: cover;
+            width: 100px; height: auto; object-fit: cover;
             border-radius: 8px; margin: 2rem 0 1.5rem;
             float: left; margin-right: 1.25rem; margin-bottom: 0.5rem;
         }}
