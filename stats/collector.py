@@ -93,8 +93,8 @@ async def _collect_telegram(date_str: str) -> dict:
         )
         stats["comments"] = result.scalar() or 0
 
-    # Telegram views: aggregate from stored channel_post updates + per-post forwarding refresh
-    await _refresh_telegram_views(date_str)
+    # Telegram views: Bot API only provides views at the time of channel_post update.
+    # No reliable way to refresh later. We store whatever the initial update gave us.
     async with async_session() as session:
         result = await session.execute(
             select(sa_func.coalesce(sa_func.sum(Message.view_count), 0)).where(
@@ -104,85 +104,13 @@ async def _collect_telegram(date_str: str) -> dict:
             )
         )
         stats["views"] = result.scalar() or 0
+        logger.info("Telegram views from DB (sum of view_count): %d", stats["views"])
 
     pos, neg = await _collect_reactions(Platform.TELEGRAM.value, date_str)
     stats["likes"] = pos
     stats["dislikes"] = neg
 
     return stats
-
-
-async def _refresh_telegram_views(date_str: str) -> None:
-    """Refresh view counts for channel posts by forwarding to discussion group.
-
-    The Bot API only provides view counts at the time of the initial update.
-    We forward each channel post to the linked discussion group, read the
-    forwarded message (which inherits the channel views counter), then delete it.
-    """
-    if not settings.telegram_bot_token or not settings.telegram_channel_id:
-        return
-
-    client = await _http_client()
-
-    try:
-        resp = await client.post(_tg_url("getChat"),
-                                  json={"chat_id": settings.telegram_channel_id})
-        chat_data = resp.json()
-        if not chat_data.get("ok"):
-            return
-        discussion_id = chat_data["result"].get("linked_chat_id")
-        if not discussion_id:
-            logger.debug("No discussion group linked to channel, skipping view refresh")
-            return
-    except Exception:
-        logger.warning("Cannot get discussion group for view refresh", exc_info=True)
-        return
-
-    async with async_session() as session:
-        result = await session.execute(
-            select(Message).where(
-                Message.platform == Platform.TELEGRAM.value,
-                Message.category == "channel_post",
-                sa_func.date(Message.created_at) == date_str,
-            )
-        )
-        posts = result.scalars().all()
-
-    refreshed = 0
-    for post in posts:
-        if not post.platform_message_id:
-            continue
-        try:
-            fwd_resp = await client.post(_tg_url("forwardMessage"), json={
-                "chat_id": discussion_id,
-                "from_chat_id": settings.telegram_channel_id,
-                "message_id": int(post.platform_message_id),
-                "disable_notification": True,
-            })
-            fwd_data = fwd_resp.json()
-            if not fwd_data.get("ok"):
-                continue
-
-            fwd_msg = fwd_data["result"]
-            views = fwd_msg.get("views", 0) or 0
-
-            await client.post(_tg_url("deleteMessage"), json={
-                "chat_id": discussion_id,
-                "message_id": fwd_msg["message_id"],
-            })
-
-            if views > (post.view_count or 0):
-                async with async_session() as session:
-                    msg = await session.get(Message, post.id)
-                    if msg:
-                        msg.view_count = views
-                        await session.commit()
-                        refreshed += 1
-        except Exception:
-            logger.debug("View refresh failed for post #%s", post.platform_message_id)
-
-    if refreshed:
-        logger.info("Refreshed Telegram views for %d posts on %s", refreshed, date_str)
 
 
 async def _collect_facebook(date_str: str) -> dict:
@@ -233,7 +161,7 @@ async def _collect_facebook(date_str: str) -> dict:
 
 
 async def _collect_facebook_post_views(date_str: str, token: str) -> int:
-    """Sum impressions from individual Facebook posts published today."""
+    """Collect Facebook views using multiple fallback strategies."""
     total_views = 0
     client = await _http_client()
 
@@ -248,14 +176,14 @@ async def _collect_facebook_post_views(date_str: str, token: str) -> int:
         )
         post_ids = [r[0] for r in result.all()]
 
+    logger.info("Facebook: %d published posts today, collecting views...", len(post_ids))
+
+    # Strategy 1: per-post insights (post_impressions)
     for post_id in post_ids:
         try:
             resp = await client.get(
                 f"{FACEBOOK_GRAPH_API}/{post_id}/insights",
-                params={
-                    "metric": "post_impressions",
-                    "access_token": token,
-                },
+                params={"metric": "post_impressions", "access_token": token},
             )
             data = resp.json()
             if "data" in data and data["data"]:
@@ -263,39 +191,75 @@ async def _collect_facebook_post_views(date_str: str, token: str) -> int:
                 if values:
                     views = values[-1].get("value", 0)
                     total_views += views
-            elif "error" in data:
-                err_msg = data["error"].get("message", "")
-                if "Unsupported request" not in err_msg:
-                    logger.warning("Facebook post insights error for %s: %s", post_id, err_msg)
+                    logger.info("Facebook post %s insights: %d impressions", post_id, views)
+                    continue
+            if "error" in data:
+                logger.warning("Facebook post insights error for %s: %s",
+                               post_id, data["error"].get("message", "unknown"))
         except Exception:
-            logger.debug("Failed to get insights for FB post %s", post_id)
+            logger.warning("Facebook insights request failed for %s", post_id, exc_info=True)
 
-    if not post_ids:
+    if total_views > 0:
+        logger.info("Facebook views (post_impressions): %d", total_views)
+        return total_views
+
+    # Strategy 2: per-post engagement (reactions + comments + shares)
+    engagement_total = 0
+    for post_id in post_ids:
         try:
-            from datetime import datetime as _dt, timedelta
-            dt_date = _dt.strptime(date_str, "%Y-%m-%d")
-            since_ts = int(dt_date.timestamp())
-            until_ts = int((dt_date + timedelta(days=1)).timestamp())
             resp = await client.get(
-                f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/insights",
+                f"{FACEBOOK_GRAPH_API}/{post_id}",
                 params={
-                    "metric": "page_impressions_unique",
-                    "period": "day",
-                    "since": since_ts,
-                    "until": until_ts,
+                    "fields": "shares,reactions.summary(total_count),comments.summary(total_count)",
                     "access_token": token,
                 },
             )
             data = resp.json()
-            if "data" in data and data["data"]:
-                values = data["data"][0].get("values", [])
-                if values:
-                    total_views = values[-1].get("value", 0)
+            if "error" not in data:
+                reactions = data.get("reactions", {}).get("summary", {}).get("total_count", 0)
+                comments = data.get("comments", {}).get("summary", {}).get("total_count", 0)
+                shares = data.get("shares", {}).get("count", 0)
+                eng = reactions + comments + shares
+                engagement_total += eng
+                logger.info("Facebook post %s engagement: reactions=%d comments=%d shares=%d",
+                            post_id, reactions, comments, shares)
+            else:
+                logger.warning("Facebook post engagement error for %s: %s",
+                               post_id, data["error"].get("message", ""))
         except Exception:
-            pass
+            logger.debug("Facebook engagement request failed for %s", post_id)
 
-    if total_views:
-        logger.info("Facebook views for %s: %d (from %d posts)", date_str, total_views, len(post_ids))
+    if engagement_total > 0:
+        logger.info("Facebook views (engagement fallback): %d", engagement_total)
+        return engagement_total
+
+    # Strategy 3: page-level views
+    try:
+        from datetime import datetime as _dt, timedelta
+        dt_date = _dt.strptime(date_str, "%Y-%m-%d")
+        since_ts = int(dt_date.timestamp())
+        until_ts = int((dt_date + timedelta(days=1)).timestamp())
+        resp = await client.get(
+            f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/insights",
+            params={
+                "metric": "page_views_total",
+                "period": "day",
+                "since": since_ts,
+                "until": until_ts,
+                "access_token": token,
+            },
+        )
+        data = resp.json()
+        if "data" in data and data["data"]:
+            values = data["data"][0].get("values", [])
+            if values:
+                total_views = values[-1].get("value", 0)
+                logger.info("Facebook page_views_total: %d", total_views)
+        elif "error" in data:
+            logger.warning("Facebook page insights error: %s", data["error"].get("message", ""))
+    except Exception:
+        logger.warning("Facebook page insights failed", exc_info=True)
+
     return total_views
 
 
@@ -354,7 +318,7 @@ async def _collect_instagram(date_str: str) -> dict:
 
 
 async def _collect_instagram_post_views(date_str: str, token: str) -> int:
-    """Sum impressions from individual Instagram media published today."""
+    """Collect Instagram views using multiple fallback strategies."""
     total_views = 0
     client = await _http_client()
 
@@ -369,33 +333,59 @@ async def _collect_instagram_post_views(date_str: str, token: str) -> int:
         )
         post_ids = [r[0] for r in result.all()]
 
+    logger.info("Instagram: %d published media today, collecting views...", len(post_ids))
+
+    # Strategy 1: per-media insights (impressions)
     for media_id in post_ids:
         try:
             resp = await client.get(
                 f"{FACEBOOK_GRAPH_API}/{media_id}/insights",
-                params={
-                    "metric": "impressions,reach",
-                    "access_token": token,
-                },
+                params={"metric": "impressions,reach", "access_token": token},
             )
             data = resp.json()
-            if "data" in data:
+            if "data" in data and data["data"]:
                 for metric in data["data"]:
                     if metric.get("name") == "impressions":
                         values = metric.get("values", [])
                         if values:
-                            total_views += values[0].get("value", 0)
+                            val = values[0].get("value", 0)
+                            total_views += val
+                            logger.info("Instagram media %s impressions: %d", media_id, val)
                         break
             elif "error" in data:
-                err = data["error"].get("message", "")
-                if "not available" not in err.lower():
-                    logger.debug("Instagram media insights error for %s: %s", media_id, err)
+                logger.warning("Instagram insights error for %s: %s",
+                               media_id, data["error"].get("message", ""))
         except Exception:
-            logger.debug("Failed to get insights for IG media %s", media_id)
+            logger.warning("Instagram insights request failed for %s", media_id, exc_info=True)
 
-    if total_views:
-        logger.info("Instagram views for %s: %d (from %d posts)", date_str, total_views, len(post_ids))
-    return total_views
+    if total_views > 0:
+        logger.info("Instagram views (insights): %d", total_views)
+        return total_views
+
+    # Strategy 2: per-media engagement (like_count + comments_count)
+    engagement_total = 0
+    for media_id in post_ids:
+        try:
+            resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{media_id}",
+                params={"fields": "like_count,comments_count", "access_token": token},
+            )
+            data = resp.json()
+            if "error" not in data:
+                likes = data.get("like_count", 0)
+                comments = data.get("comments_count", 0)
+                engagement_total += likes + comments
+                logger.info("Instagram media %s engagement: likes=%d comments=%d",
+                            media_id, likes, comments)
+            else:
+                logger.warning("Instagram media engagement error for %s: %s",
+                               media_id, data["error"].get("message", ""))
+        except Exception:
+            logger.debug("Instagram engagement failed for %s", media_id)
+
+    if engagement_total > 0:
+        logger.info("Instagram views (engagement fallback): %d", engagement_total)
+    return engagement_total
 
 
 async def _collect_placeholder(platform: Platform, date_str: str) -> dict:

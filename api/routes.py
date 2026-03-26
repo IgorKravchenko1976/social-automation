@@ -561,6 +561,132 @@ async def public_messages_status():
     ]
 
 
+@public_router.get("/debug/test-views")
+async def debug_test_views():
+    """Test view/impression collection from all platform APIs — shows raw responses."""
+    import httpx
+    from config.platforms import FACEBOOK_GRAPH_API
+    from config.settings import get_now_local
+    from db.database import async_session as _async_session
+    from db.models import Publication, PostStatus, Message
+    from sqlalchemy import func as sa_func
+
+    results = {}
+    date_str = get_now_local().strftime("%Y-%m-%d")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # --- Telegram ---
+        tg_info = {"channel_posts_in_db": 0, "total_view_count": 0, "posts": []}
+        if settings.telegram_bot_token and settings.telegram_channel_id:
+            async with _async_session() as session:
+                res = await session.execute(
+                    select(Message).where(
+                        Message.platform == "telegram",
+                        Message.category == "channel_post",
+                        sa_func.date(Message.created_at) == date_str,
+                    )
+                )
+                posts = res.scalars().all()
+                tg_info["channel_posts_in_db"] = len(posts)
+                tg_info["total_view_count"] = sum(p.view_count or 0 for p in posts)
+                for p in posts[:5]:
+                    tg_info["posts"].append({
+                        "msg_id": p.platform_message_id,
+                        "view_count": p.view_count,
+                        "text": (p.text or "")[:60],
+                    })
+        results["telegram"] = tg_info
+
+        # --- Facebook ---
+        fb_info = {"post_ids": [], "insights_responses": [], "page_views_response": None}
+        if settings.facebook_page_id and settings.facebook_page_access_token:
+            from stats.token_renewer import get_active_token
+            token = await get_active_token("facebook") or settings.facebook_page_access_token
+
+            async with _async_session() as session:
+                res = await session.execute(
+                    select(Publication.platform_post_id).where(
+                        Publication.platform == "facebook",
+                        Publication.status == PostStatus.PUBLISHED,
+                        sa_func.date(Publication.published_at) == date_str,
+                        Publication.platform_post_id.isnot(None),
+                    )
+                )
+                post_ids = [r[0] for r in res.all()]
+            fb_info["post_ids"] = post_ids
+
+            for pid in post_ids[:3]:
+                try:
+                    resp = await client.get(
+                        f"{FACEBOOK_GRAPH_API}/{pid}/insights",
+                        params={"metric": "post_impressions", "access_token": token},
+                    )
+                    fb_info["insights_responses"].append({"post_id": pid, "data": resp.json()})
+                except Exception as e:
+                    fb_info["insights_responses"].append({"post_id": pid, "error": str(e)})
+
+                try:
+                    resp2 = await client.get(
+                        f"{FACEBOOK_GRAPH_API}/{pid}",
+                        params={"fields": "shares,reactions.summary(total_count),comments.summary(total_count)", "access_token": token},
+                    )
+                    fb_info["insights_responses"].append({"post_id": pid, "engagement": resp2.json()})
+                except Exception as e:
+                    fb_info["insights_responses"].append({"post_id": pid, "engagement_error": str(e)})
+
+            try:
+                resp3 = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/insights",
+                    params={"metric": "page_views_total", "period": "day", "access_token": token},
+                )
+                fb_info["page_views_response"] = resp3.json()
+            except Exception as e:
+                fb_info["page_views_response"] = {"error": str(e)}
+
+        results["facebook"] = fb_info
+
+        # --- Instagram ---
+        ig_info = {"media_ids": [], "insights_responses": []}
+        if settings.instagram_user_id and settings.instagram_access_token:
+            from stats.token_renewer import get_active_token
+            token = await get_active_token("instagram") or settings.instagram_access_token
+
+            async with _async_session() as session:
+                res = await session.execute(
+                    select(Publication.platform_post_id).where(
+                        Publication.platform == "instagram",
+                        Publication.status == PostStatus.PUBLISHED,
+                        sa_func.date(Publication.published_at) == date_str,
+                        Publication.platform_post_id.isnot(None),
+                    )
+                )
+                media_ids = [r[0] for r in res.all()]
+            ig_info["media_ids"] = media_ids
+
+            for mid in media_ids[:3]:
+                try:
+                    resp = await client.get(
+                        f"{FACEBOOK_GRAPH_API}/{mid}/insights",
+                        params={"metric": "impressions,reach", "access_token": token},
+                    )
+                    ig_info["insights_responses"].append({"media_id": mid, "data": resp.json()})
+                except Exception as e:
+                    ig_info["insights_responses"].append({"media_id": mid, "error": str(e)})
+
+                try:
+                    resp2 = await client.get(
+                        f"{FACEBOOK_GRAPH_API}/{mid}",
+                        params={"fields": "like_count,comments_count,timestamp", "access_token": token},
+                    )
+                    ig_info["insights_responses"].append({"media_id": mid, "basic": resp2.json()})
+                except Exception as e:
+                    ig_info["insights_responses"].append({"media_id": mid, "basic_error": str(e)})
+
+        results["instagram"] = ig_info
+
+    return {"date": date_str, "results": results}
+
+
 @public_router.get("/blog/posts", response_model=list[BlogPostOut])
 async def blog_posts(
     limit: int = Query(10, le=50),
