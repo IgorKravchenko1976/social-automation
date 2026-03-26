@@ -675,7 +675,7 @@ async def debug_test_views():
                 try:
                     resp = await client.get(
                         f"{FACEBOOK_GRAPH_API}/{mid}/insights",
-                        params={"metric": "impressions,reach", "access_token": token},
+                        params={"metric": "reach,total_interactions", "access_token": token},
                     )
                     ig_info["insights_responses"].append({"media_id": mid, "data": resp.json()})
                 except Exception as e:

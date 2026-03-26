@@ -187,12 +187,12 @@ async def _collect_facebook_post_views(date_str: str, token: str) -> int:
     logger.info("Facebook: %d published posts today, collecting views (IDs: %s)...",
                 len(post_ids), post_ids[:3])
 
-    # Strategy 1: per-post insights (post_impressions)
+    # Strategy 1: per-post insights (post_impressions_unique = reach)
     for post_id in post_ids:
         try:
             resp = await client.get(
                 f"{FACEBOOK_GRAPH_API}/{post_id}/insights",
-                params={"metric": "post_impressions", "access_token": token},
+                params={"metric": "post_impressions_unique,post_engaged_users", "access_token": token},
             )
             data = resp.json()
             if "data" in data and data["data"]:
@@ -358,22 +358,22 @@ async def _collect_instagram_post_views(date_str: str, token: str) -> int:
 
     logger.info("Instagram: %d published media today, collecting views...", len(post_ids))
 
-    # Strategy 1: per-media insights
+    # Strategy 1: per-media insights (reach + total_interactions, v22.0+ compatible)
     for media_id in post_ids:
         try:
             resp = await client.get(
                 f"{FACEBOOK_GRAPH_API}/{media_id}/insights",
-                params={"metric": "impressions,reach", "access_token": token},
+                params={"metric": "reach,total_interactions", "access_token": token},
             )
             data = resp.json()
             if "data" in data and data["data"]:
                 for metric in data["data"]:
-                    if metric.get("name") in ("impressions", "views"):
+                    if metric.get("name") == "reach":
                         values = metric.get("values", [])
                         if values:
                             val = values[0].get("value", 0)
                             total_views += val
-                            logger.info("Instagram media %s %s: %d", media_id, metric["name"], val)
+                            logger.info("Instagram media %s reach: %d", media_id, val)
                         break
             elif "error" in data:
                 logger.warning("Instagram insights error for %s: %s",
