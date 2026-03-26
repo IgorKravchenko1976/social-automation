@@ -16,6 +16,7 @@ from content.generator import (
     extract_location_coordinates, build_map_link,
     translate_post,
 )
+from content.fact_checker import fact_check_post, MAX_FACT_CHECK_RETRIES
 from content.tourism_topics import (
     TOURISM_RSS_FEEDS, BANNED_RSS_KEYWORDS,
     ACTIVE_DIRECTIONS, LEISURE_DIRECTIONS, FEATURE_DIRECTIONS,
@@ -572,6 +573,93 @@ def _detect_content_type(post: Post) -> str:
     return "leisure_travel"
 
 
+async def _generate_and_verify_text(
+    post: Post,
+    platform: Platform,
+    content_type: str,
+) -> str:
+    """Generate platform-adapted text with editorial fact-checking.
+
+    Retries up to MAX_FACT_CHECK_RETRIES times with correction hints.
+    If all retries fail, generates a safe version without specific dates/events.
+    """
+    last_suggestion = ""
+
+    for attempt in range(MAX_FACT_CHECK_RETRIES + 1):
+        if post.source == "rss":
+            source_text = post.content_raw
+            if attempt > 0:
+                source_text += (
+                    "\n\nУВАГА РЕДАКТОРА: попередня версія відхилена фактчекером. "
+                    f"Проблема: {last_suggestion}\n"
+                    "Перепиши ТОЧНО за оригіналом, НЕ додавай фактів від себе."
+                )
+            text = await generate_post_text(
+                topic="", platform=platform,
+                source_text=source_text,
+                content_type="tourism_news",
+            )
+        else:
+            topic = post.content_raw
+            if attempt > 0:
+                topic += (
+                    f"\n\nУВАГА РЕДАКТОРА: попередня версія відхилена фактчекером. "
+                    f"Проблема: {last_suggestion}\n"
+                    "НЕ вигадуй конкретних дат та подій. "
+                    "Якщо не впевнений у даті — НЕ ПИШИ дату. "
+                    "Пиши лише загальновідомі та перевірені факти."
+                )
+            text = await generate_post_text(
+                topic=topic, platform=platform,
+                content_type=content_type,
+            )
+
+        check = await fact_check_post(text, content_type)
+        if check.passed:
+            if attempt > 0:
+                logger.info(
+                    "FACT-CHECK: Passed on attempt %d/%d for %s post_id=%s",
+                    attempt + 1, MAX_FACT_CHECK_RETRIES + 1,
+                    platform.value, post.id,
+                )
+            return text
+
+        last_suggestion = check.suggestion or check.summary
+        logger.warning(
+            "FACT-CHECK: Attempt %d/%d FAIL for %s post_id=%s: %s",
+            attempt + 1, MAX_FACT_CHECK_RETRIES + 1,
+            platform.value, post.id, check.summary[:150],
+        )
+
+    logger.error(
+        "FACT-CHECK: All %d attempts exhausted for post_id=%s — generating safe version",
+        MAX_FACT_CHECK_RETRIES + 1, post.id,
+    )
+
+    safe_instruction = (
+        "\n\nКРИТИЧНО: Попередні версії цього поста відхилені фактчекером через "
+        "фактичні помилки. Ця версія ПОВИННА бути БЕЗПЕЧНОЮ:\n"
+        "- НЕ вказуй ЖОДНИХ конкретних дат подій/змагань/фестивалів\n"
+        "- НЕ згадуй конкретні змагання/турніри з датами\n"
+        "- Пиши ТІЛЬКИ загальновідомі факти про місце (атмосфера, краса, поради)\n"
+        "- Якщо тема про спорт — пиши про стадіон/трасу без прив'язки до конкретних подій\n"
+        "- Використовуй формулювання 'в сезон', 'щороку', 'традиційно' замість конкретних дат"
+    )
+
+    if post.source == "rss":
+        return await generate_post_text(
+            topic="", platform=platform,
+            source_text=post.content_raw + safe_instruction,
+            content_type="tourism_news",
+        )
+    else:
+        return await generate_post_text(
+            topic=post.content_raw + safe_instruction,
+            platform=platform,
+            content_type=content_type,
+        )
+
+
 async def _publish_single(
     session: AsyncSession,
     post: Post,
@@ -584,17 +672,9 @@ async def _publish_single(
 
         if not pub.content_adapted:
             content_type = _detect_content_type(post)
-            if post.source == "rss":
-                pub.content_adapted = await generate_post_text(
-                    topic="", platform=platform,
-                    source_text=post.content_raw,
-                    content_type="tourism_news",
-                )
-            else:
-                pub.content_adapted = await generate_post_text(
-                    topic=post.content_raw, platform=platform,
-                    content_type=content_type,
-                )
+            pub.content_adapted = await _generate_and_verify_text(
+                post, platform, content_type,
+            )
 
             limits = PLATFORM_LIMITS.get(platform, {})
             if limits.get("supports_links") and post.latitude and post.longitude:
