@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
     telegram_channel_id: str = ""
+    telegram_api_id: str = ""
+    telegram_api_hash: str = ""
+    telegram_session: str = ""  # Telethon StringSession for view counts
 
     # Facebook
     facebook_page_id: str = ""

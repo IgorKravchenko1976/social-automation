@@ -93,8 +93,8 @@ async def _collect_telegram(date_str: str) -> dict:
         )
         stats["comments"] = result.scalar() or 0
 
-    # Telegram views: Bot API only provides views at the time of channel_post update.
-    # No reliable way to refresh later. We store whatever the initial update gave us.
+    # Telegram views: refresh via Telethon Client API if configured, otherwise use DB
+    await _refresh_telegram_views_telethon(date_str)
     async with async_session() as session:
         result = await session.execute(
             select(sa_func.coalesce(sa_func.sum(Message.view_count), 0)).where(
@@ -104,7 +104,7 @@ async def _collect_telegram(date_str: str) -> dict:
             )
         )
         stats["views"] = result.scalar() or 0
-        logger.info("Telegram views from DB (sum of view_count): %d", stats["views"])
+        logger.info("Telegram views (sum of view_count): %d", stats["views"])
 
     pos, neg = await _collect_reactions(Platform.TELEGRAM.value, date_str)
     stats["likes"] = pos
@@ -335,22 +335,22 @@ async def _collect_instagram_post_views(date_str: str, token: str) -> int:
 
     logger.info("Instagram: %d published media today, collecting views...", len(post_ids))
 
-    # Strategy 1: per-media insights (impressions)
+    # Strategy 1: per-media insights (views — replaced deprecated 'impressions' since April 2025)
     for media_id in post_ids:
         try:
             resp = await client.get(
                 f"{FACEBOOK_GRAPH_API}/{media_id}/insights",
-                params={"metric": "impressions,reach", "access_token": token},
+                params={"metric": "views,reach", "access_token": token},
             )
             data = resp.json()
             if "data" in data and data["data"]:
                 for metric in data["data"]:
-                    if metric.get("name") == "impressions":
+                    if metric.get("name") == "views":
                         values = metric.get("values", [])
                         if values:
                             val = values[0].get("value", 0)
                             total_views += val
-                            logger.info("Instagram media %s impressions: %d", media_id, val)
+                            logger.info("Instagram media %s views: %d", media_id, val)
                         break
             elif "error" in data:
                 logger.warning("Instagram insights error for %s: %s",
@@ -386,6 +386,80 @@ async def _collect_instagram_post_views(date_str: str, token: str) -> int:
     if engagement_total > 0:
         logger.info("Instagram views (engagement fallback): %d", engagement_total)
     return engagement_total
+
+
+async def _refresh_telegram_views_telethon(date_str: str) -> None:
+    """Use Telethon Client API to get real view counts for today's channel posts.
+
+    Requires TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_SESSION env vars.
+    If not configured, silently skips (Bot API fallback: initial view_count from DB).
+    """
+    if not settings.telegram_api_id or not settings.telegram_api_hash or not settings.telegram_session:
+        return
+
+    try:
+        from telethon import TelegramClient, functions
+        from telethon.sessions import StringSession
+    except ImportError:
+        logger.debug("Telethon not installed, skipping view refresh")
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Message).where(
+                Message.platform == Platform.TELEGRAM.value,
+                Message.category == "channel_post",
+                sa_func.date(Message.created_at) == date_str,
+            )
+        )
+        posts = result.scalars().all()
+
+    if not posts:
+        return
+
+    msg_ids = [int(p.platform_message_id) for p in posts if p.platform_message_id]
+    if not msg_ids:
+        return
+
+    try:
+        client = TelegramClient(
+            StringSession(settings.telegram_session),
+            int(settings.telegram_api_id),
+            settings.telegram_api_hash,
+        )
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            logger.warning("Telethon session not authorized, skipping view refresh")
+            await client.disconnect()
+            return
+
+        channel = await client.get_entity(settings.telegram_channel_id)
+        result = await client(functions.messages.GetMessagesViewsRequest(
+            peer=channel,
+            id=msg_ids,
+            increment=False,
+        ))
+
+        refreshed = 0
+        for msg_view, post in zip(result.views, posts):
+            if not post.platform_message_id:
+                continue
+            views = msg_view.views or 0
+            if views > (post.view_count or 0):
+                async with async_session() as db_session:
+                    db_msg = await db_session.get(Message, post.id)
+                    if db_msg:
+                        db_msg.view_count = views
+                        await db_session.commit()
+                        refreshed += 1
+
+        await client.disconnect()
+        if refreshed:
+            logger.info("Telethon refreshed views for %d/%d channel posts on %s",
+                         refreshed, len(posts), date_str)
+    except Exception:
+        logger.warning("Telethon view refresh failed", exc_info=True)
 
 
 async def _collect_placeholder(platform: Platform, date_str: str) -> dict:
