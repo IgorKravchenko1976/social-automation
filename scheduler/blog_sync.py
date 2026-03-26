@@ -41,7 +41,11 @@ async def sync_blog_to_vps() -> int:
     root_files: list[Path] = []
     if sitemap_file.is_file():
         root_files.append(sitemap_file)
-    root_files.extend(_fetch_website_files())
+    website_files = _fetch_website_files()
+    if not sitemap_file.is_file():
+        sitemap_from_gh = [f for f in website_files if f.name == "sitemap.xml"]
+        root_files.extend(sitemap_from_gh)
+    root_files.extend([f for f in website_files if f.name != "sitemap.xml"])
     if root_files:
         pushed += _sftp_push_to_root(root_files)
 
@@ -53,7 +57,7 @@ def _fetch_website_files() -> list[Path]:
     import tempfile, httpx
     base = "https://raw.githubusercontent.com/IgorKravchenko1976/im-in-website/main"
     files_to_sync = [
-        "blog.html", "index.html", "robots.txt",
+        "blog.html", "index.html", "robots.txt", "sitemap.xml",
         "terms.html", "privacy.html", "404.html",
         "translations.js", "styles.css", "manifest.json",
         "script.js", "favicon.svg",

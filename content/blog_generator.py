@@ -493,12 +493,17 @@ async def generate_all_published() -> list[Path]:
         )
         rows = result.all()
 
-    if not rows:
-        logger.info("No published posts — nothing to generate")
-        return []
-
     generated: list[Path] = []
     index_entries: list[dict] = []
+
+    if not rows:
+        logger.info("No published posts — generating sitemap + empty index only")
+        idx_path = generate_posts_index([])
+        generated.append(idx_path)
+        sitemap_path = _generate_sitemap([])
+        if sitemap_path:
+            generated.append(sitemap_path)
+        return generated
 
     for post, published_at in rows:
         image_url = _thumb_url_if_exists(post.id)
@@ -551,10 +556,30 @@ def _generate_sitemap(entries: list[dict]) -> Optional[Path]:
         lines = [
             '<?xml version="1.0" encoding="UTF-8"?>',
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-            f'  <url><loc>{SITE_URL}/</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>',
-            f'  <url><loc>{SITE_URL}/blog.html</loc><lastmod>{today}</lastmod><changefreq>daily</changefreq><priority>0.9</priority></url>',
-            f'  <url><loc>{SITE_URL}/terms.html</loc><lastmod>2026-03-08</lastmod><changefreq>monthly</changefreq><priority>0.3</priority></url>',
-            f'  <url><loc>{SITE_URL}/privacy.html</loc><lastmod>2026-03-08</lastmod><changefreq>monthly</changefreq><priority>0.3</priority></url>',
+            '  <url>',
+            f'    <loc>{SITE_URL}/</loc>',
+            f'    <lastmod>{today}</lastmod>',
+            '    <changefreq>weekly</changefreq>',
+            '    <priority>1.0</priority>',
+            '  </url>',
+            '  <url>',
+            f'    <loc>{SITE_URL}/blog.html</loc>',
+            f'    <lastmod>{today}</lastmod>',
+            '    <changefreq>daily</changefreq>',
+            '    <priority>0.9</priority>',
+            '  </url>',
+            '  <url>',
+            f'    <loc>{SITE_URL}/terms.html</loc>',
+            '    <lastmod>2026-03-08</lastmod>',
+            '    <changefreq>monthly</changefreq>',
+            '    <priority>0.3</priority>',
+            '  </url>',
+            '  <url>',
+            f'    <loc>{SITE_URL}/privacy.html</loc>',
+            '    <lastmod>2026-03-08</lastmod>',
+            '    <changefreq>monthly</changefreq>',
+            '    <priority>0.3</priority>',
+            '  </url>',
         ]
         for e in entries:
             pub = e.get("published_at")
@@ -565,7 +590,14 @@ def _generate_sitemap(entries: list[dict]) -> Optional[Path]:
                     d = pub.strftime("%Y-%m-%d")
             else:
                 d = today
-            lines.append(f'  <url><loc>{SITE_URL}/blog/post-{e["id"]}.html</loc><lastmod>{d}</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>')
+            lines.extend([
+                '  <url>',
+                f'    <loc>{SITE_URL}/blog/post-{e["id"]}.html</loc>',
+                f'    <lastmod>{d}</lastmod>',
+                '    <changefreq>monthly</changefreq>',
+                '    <priority>0.7</priority>',
+                '  </url>',
+            ])
         lines.append('</urlset>')
 
         sitemap_path = _blog_dir() / "sitemap.xml"
