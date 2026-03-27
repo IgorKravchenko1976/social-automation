@@ -472,18 +472,17 @@ async def _refresh_telegram_views_telethon(date_str: str) -> None:
                     Publication.platform_post_id.isnot(None),
                 )
             )
-            pubs = result.all()
+            pubs = result.scalars().all()
             if pubs:
                 logger.info("Telethon: no channel_post in Message table, creating from %d Publications", len(pubs))
-                for pub_row in pubs:
-                    pub = pub_row[0] if isinstance(pub_row, tuple) else pub_row
+                for pub in pubs:
                     session.add(Message(
                         platform=Platform.TELEGRAM.value,
-                        platform_message_id=pub.platform_post_id,
+                        platform_message_id=str(pub.platform_post_id),
                         sender_id="channel",
                         sender_name="channel",
                         direction=MessageDirection.OUTGOING,
-                        text="(from publication)",
+                        text=(pub.content_adapted or "(from publication)")[:500],
                         category="channel_post",
                         view_count=0,
                     ))
