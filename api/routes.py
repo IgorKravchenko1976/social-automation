@@ -695,6 +695,69 @@ async def telethon_sign_in(phone: str, code: str, password: str = ""):
     return {"ok": True, "session": session_string, "message": "Session saved to DB!"}
 
 
+@public_router.get("/debug/test-telethon")
+async def debug_test_telethon():
+    """Trigger Telethon view refresh and return results."""
+    from config.settings import get_now_local
+    from stats.collector import _refresh_telegram_views_telethon, _get_telethon_session
+    from db.database import async_session as _async_session
+    from db.models import Message, Publication, PostStatus
+    from sqlalchemy import func as sa_func
+
+    date_str = get_now_local().strftime("%Y-%m-%d")
+    session_str = await _get_telethon_session()
+
+    report = {
+        "date": date_str,
+        "session_available": bool(session_str),
+        "api_id_configured": bool(settings.telegram_api_id),
+        "api_hash_configured": bool(settings.telegram_api_hash),
+    }
+
+    async with _async_session() as session:
+        res = await session.execute(
+            select(sa_func.count(Publication.id)).where(
+                Publication.platform == "telegram",
+                Publication.status == PostStatus.PUBLISHED,
+                sa_func.date(Publication.published_at) == date_str,
+            )
+        )
+        report["telegram_publications_today"] = res.scalar() or 0
+
+        res2 = await session.execute(
+            select(sa_func.count(Message.id)).where(
+                Message.platform == "telegram",
+                Message.category == "channel_post",
+                sa_func.date(Message.created_at) == date_str,
+            )
+        )
+        report["channel_posts_before"] = res2.scalar() or 0
+
+    try:
+        await _refresh_telegram_views_telethon(date_str)
+        report["refresh_status"] = "ok"
+    except Exception as e:
+        report["refresh_status"] = f"error: {e}"
+
+    async with _async_session() as session:
+        res3 = await session.execute(
+            select(Message).where(
+                Message.platform == "telegram",
+                Message.category == "channel_post",
+                sa_func.date(Message.created_at) == date_str,
+            )
+        )
+        posts = res3.scalars().all()
+        report["channel_posts_after"] = len(posts)
+        report["posts"] = [
+            {"msg_id": p.platform_message_id, "views": p.view_count}
+            for p in posts
+        ]
+        report["total_views"] = sum(p.view_count or 0 for p in posts)
+
+    return report
+
+
 @public_router.get("/debug/test-views")
 async def debug_test_views():
     """Test view/impression collection from all platform APIs — shows raw responses."""
