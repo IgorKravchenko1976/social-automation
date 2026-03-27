@@ -437,10 +437,13 @@ async def _refresh_telegram_views_telethon(date_str: str) -> None:
     If not configured, silently skips (Bot API fallback: initial view_count from DB).
     """
     if not settings.telegram_api_id or not settings.telegram_api_hash:
+        logger.debug("Telethon: API ID/Hash not configured")
         return
     session_str = await _get_telethon_session()
     if not session_str:
+        logger.debug("Telethon: no session string available")
         return
+    logger.info("Telethon: session found, refreshing views for %s...", date_str)
 
     try:
         from telethon import TelegramClient, functions
@@ -460,6 +463,44 @@ async def _refresh_telegram_views_telethon(date_str: str) -> None:
         posts = result.scalars().all()
 
     if not posts:
+        async with async_session() as session:
+            result = await session.execute(
+                select(Publication).where(
+                    Publication.platform == Platform.TELEGRAM.value,
+                    Publication.status == PostStatus.PUBLISHED,
+                    sa_func.date(Publication.published_at) == date_str,
+                    Publication.platform_post_id.isnot(None),
+                )
+            )
+            pubs = result.all()
+            if pubs:
+                logger.info("Telethon: no channel_post in Message table, creating from %d Publications", len(pubs))
+                for pub_row in pubs:
+                    pub = pub_row[0] if isinstance(pub_row, tuple) else pub_row
+                    session.add(Message(
+                        platform=Platform.TELEGRAM.value,
+                        platform_message_id=pub.platform_post_id,
+                        sender_id="channel",
+                        sender_name="channel",
+                        direction=MessageDirection.OUTGOING,
+                        text="(from publication)",
+                        category="channel_post",
+                        view_count=0,
+                    ))
+                await session.commit()
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(Message).where(
+                    Message.platform == Platform.TELEGRAM.value,
+                    Message.category == "channel_post",
+                    sa_func.date(Message.created_at) == date_str,
+                )
+            )
+            posts = result.scalars().all()
+
+    if not posts:
+        logger.info("Telethon: no channel posts to refresh for %s", date_str)
         return
 
     msg_ids = [int(p.platform_message_id) for p in posts if p.platform_message_id]

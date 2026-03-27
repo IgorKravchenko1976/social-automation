@@ -18,6 +18,39 @@ _polling_task: Optional[asyncio.Task] = None
 class TelegramPlatform(BasePlatform):
     platform = Platform.TELEGRAM
 
+    async def _save_channel_post(self, result_msg: dict, text: str) -> None:
+        """Save published channel post to Message table for view tracking."""
+        from db.database import async_session
+        from db.models import Message as MsgModel, MessageDirection
+        try:
+            message_id = result_msg.get("message_id")
+            chat = result_msg.get("chat", {})
+            views = result_msg.get("views", 0) or 0
+            async with async_session() as session:
+                from sqlalchemy import select
+                existing = await session.execute(
+                    select(MsgModel).where(
+                        MsgModel.platform == "telegram",
+                        MsgModel.platform_message_id == str(message_id),
+                        MsgModel.category == "channel_post",
+                    )
+                )
+                if not existing.scalar_one_or_none():
+                    session.add(MsgModel(
+                        platform="telegram",
+                        platform_message_id=str(message_id),
+                        sender_id="channel",
+                        sender_name=chat.get("title", "channel"),
+                        direction=MessageDirection.OUTGOING,
+                        text=(text or "")[:500],
+                        category="channel_post",
+                        view_count=views,
+                    ))
+                    await session.commit()
+                    logger.info("Saved channel post #%s to DB for view tracking", message_id)
+        except Exception:
+            logger.exception("Failed to save channel post to Message table")
+
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
         try:
             if image_path:
@@ -37,7 +70,9 @@ class TelegramPlatform(BasePlatform):
                     disable_web_page_preview=False,
                 )
             if data.get("ok"):
-                return PublishResult(success=True, platform_post_id=str(data["result"]["message_id"]))
+                msg_id = str(data["result"]["message_id"])
+                await self._save_channel_post(data["result"], text)
+                return PublishResult(success=True, platform_post_id=msg_id)
             return PublishResult(success=False, error=str(data))
         except Exception as e:
             logger.exception("Telegram publish failed")
@@ -54,7 +89,9 @@ class TelegramPlatform(BasePlatform):
                 )
             data = resp.json()
             if data.get("ok"):
-                return PublishResult(success=True, platform_post_id=str(data["result"]["message_id"]))
+                msg_id = str(data["result"]["message_id"])
+                await self._save_channel_post(data["result"], text)
+                return PublishResult(success=True, platform_post_id=msg_id)
             return PublishResult(success=False, error=str(data))
         except Exception as e:
             logger.exception("Telegram video publish failed")
