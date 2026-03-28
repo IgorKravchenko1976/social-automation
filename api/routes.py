@@ -695,6 +695,42 @@ async def telethon_sign_in(phone: str, code: str, password: str = ""):
     return {"ok": True, "session": session_string, "message": "Session saved to DB!"}
 
 
+@public_router.get("/debug/test-ig-subs")
+async def debug_test_ig_subs():
+    """Test Instagram subscriber collection."""
+    import httpx
+    from config.platforms import FACEBOOK_GRAPH_API
+    from stats.collector import _get_instagram_token
+
+    token = await _get_instagram_token()
+    ig_user_id = settings.instagram_user_id
+    page_id = settings.facebook_page_id
+
+    report = {
+        "instagram_user_id_env": ig_user_id or "(empty)",
+        "token_available": bool(token),
+    }
+
+    if token and page_id:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{page_id}",
+                params={"access_token": token, "fields": "instagram_business_account"},
+            )
+            discovered = r.json().get("instagram_business_account", {}).get("id")
+            report["ig_discovered_from_page"] = discovered
+
+            test_id = ig_user_id or discovered
+            if test_id:
+                r2 = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{test_id}",
+                    params={"fields": "followers_count,media_count,username", "access_token": token},
+                )
+                report["ig_profile"] = r2.json()
+
+    return report
+
+
 @public_router.get("/debug/test-telethon")
 async def debug_test_telethon():
     """Trigger Telethon view refresh and return results."""
