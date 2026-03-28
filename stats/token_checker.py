@@ -22,6 +22,7 @@ class TokenStatus:
     expires_at: Optional[datetime] = None
     days_remaining: Optional[int] = None
     error: Optional[str] = None
+    token_source: Optional[str] = None
 
 
 async def check_all_tokens() -> list[TokenStatus]:
@@ -45,11 +46,14 @@ async def _check_telegram() -> TokenStatus:
             r = await client.get(f"https://api.telegram.org/bot{token}/getMe")
             data = r.json()
             if data.get("ok"):
-                return TokenStatus("Telegram", configured=True, valid=True)
+                return TokenStatus("Telegram", configured=True, valid=True,
+                                   token_source="Bot Token")
             return TokenStatus("Telegram", configured=True, valid=False,
-                               error=data.get("description", "invalid"))
+                               error=data.get("description", "invalid"),
+                               token_source="Bot Token")
     except Exception as e:
-        return TokenStatus("Telegram", configured=True, valid=False, error=str(e))
+        return TokenStatus("Telegram", configured=True, valid=False, error=str(e),
+                           token_source="Bot Token")
 
 
 async def _check_facebook() -> TokenStatus:
@@ -77,57 +81,114 @@ async def _check_facebook() -> TokenStatus:
             return TokenStatus(
                 "Facebook", configured=True, valid=is_valid,
                 expires_at=expires_at, days_remaining=days_remaining,
+                token_source="Page Access Token",
             )
     except Exception as e:
-        return TokenStatus("Facebook", configured=True, valid=False, error=str(e))
+        return TokenStatus("Facebook", configured=True, valid=False, error=str(e),
+                           token_source="Page Access Token")
 
 
 async def _check_instagram() -> TokenStatus:
+    """Check Instagram using the same credential resolution as the platform adapter:
+    1. Facebook Page Token + IG Business Account discovery (primary)
+    2. Dedicated Instagram token + configured user ID (fallback)
+    """
     from stats.token_renewer import get_active_token
-    from db.database import async_session
-    from db.models import TokenStore
-    from sqlalchemy import select
 
-    db_token = await get_active_token("instagram")
-    token = db_token or settings.instagram_access_token
-    if not token or not settings.instagram_user_id:
+    fb_token = await get_active_token("facebook")
+    if not fb_token and not is_placeholder(settings.facebook_page_access_token):
+        fb_token = settings.facebook_page_access_token
+
+    # Strategy 1: Facebook Page Token + IG Business Account (matches InstagramPlatform._resolve_credentials)
+    if fb_token and settings.facebook_page_id and not is_placeholder(settings.facebook_page_id):
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}",
+                    params={"access_token": fb_token, "fields": "instagram_business_account"},
+                )
+                data = resp.json()
+                ig_biz = data.get("instagram_business_account", {})
+                ig_id = ig_biz.get("id")
+                if ig_id:
+                    r2 = await client.get(
+                        f"{FACEBOOK_GRAPH_API}/{ig_id}",
+                        params={"access_token": fb_token, "fields": "id,username"},
+                    )
+                    ig_data = r2.json()
+                    if "error" not in ig_data:
+                        expires_at, days_remaining = await _get_token_expiry("facebook")
+                        return TokenStatus(
+                            "Instagram", configured=True, valid=True,
+                            expires_at=expires_at, days_remaining=days_remaining,
+                            token_source="Facebook Page Token",
+                        )
+        except Exception as e:
+            logger.warning("Instagram check via FB Page Token failed: %s", e)
+
+    # Strategy 2: Dedicated Instagram token
+    ig_token = await get_active_token("instagram")
+    if not ig_token:
+        ig_token = settings.instagram_access_token if not is_placeholder(settings.instagram_access_token) else None
+
+    if not ig_token:
+        has_fb = fb_token and settings.facebook_page_id
+        if has_fb:
+            return TokenStatus("Instagram", configured=True, valid=False,
+                               error="FB token є, але IG Business Account не прив'язаний до сторінки",
+                               token_source="Facebook Page Token")
         return TokenStatus("Instagram", configured=False, valid=False)
+
+    ig_user_id = settings.instagram_user_id
+    if not ig_user_id or is_placeholder(ig_user_id):
+        return TokenStatus("Instagram", configured=False, valid=False)
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
-                f"{FACEBOOK_GRAPH_API}/{settings.instagram_user_id}",
-                params={"access_token": token, "fields": "id,username"},
+                f"{FACEBOOK_GRAPH_API}/{ig_user_id}",
+                params={"access_token": ig_token, "fields": "id,username"},
             )
             data = r.json()
             if "error" in data:
                 r2 = await client.get(
-                    f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
-                    params={"access_token": token, "fields": "id,username"},
+                    f"{INSTAGRAM_GRAPH_API}/{ig_user_id}",
+                    params={"access_token": ig_token, "fields": "id,username"},
                 )
                 data = r2.json()
             if "error" in data:
                 return TokenStatus("Instagram", configured=True, valid=False,
-                                   error=data["error"].get("message", "invalid"))
+                                   error=data["error"].get("message", "invalid"),
+                                   token_source="Instagram Token")
 
-        expires_at = None
-        days_remaining = None
-        async with async_session() as session:
-            result = await session.execute(
-                select(TokenStore).where(TokenStore.platform == "instagram")
-            )
-            row = result.scalar_one_or_none()
-            if row and row.expires_at:
-                exp = ensure_utc(row.expires_at)
-                expires_at = exp
-                days_remaining = (exp - datetime.now(timezone.utc)).days
-
+        expires_at, days_remaining = await _get_token_expiry("instagram")
         return TokenStatus("Instagram", configured=True, valid=True,
-                           expires_at=expires_at, days_remaining=days_remaining)
+                           expires_at=expires_at, days_remaining=days_remaining,
+                           token_source="Instagram Token")
     except Exception as e:
-        return TokenStatus("Instagram", configured=True, valid=False, error=str(e))
+        return TokenStatus("Instagram", configured=True, valid=False, error=str(e),
+                           token_source="Instagram Token")
+
+
+async def _get_token_expiry(platform: str) -> tuple[Optional[datetime], Optional[int]]:
+    """Read token expiry from DB for a given platform."""
+    from db.database import async_session
+    from db.models import TokenStore
+    from sqlalchemy import select
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(TokenStore).where(TokenStore.platform == platform)
+        )
+        row = result.scalar_one_or_none()
+        if row and row.expires_at:
+            exp = ensure_utc(row.expires_at)
+            days = (exp - datetime.now(timezone.utc)).days
+            return exp, days
+    return None, None
 
 
 def _check_simple(name: str, credential: str) -> TokenStatus:
     if is_placeholder(credential):
         return TokenStatus(name, configured=False, valid=False)
-    return TokenStatus(name, configured=True, valid=True)
+    return TokenStatus(name, configured=True, valid=True, token_source="Access Token")

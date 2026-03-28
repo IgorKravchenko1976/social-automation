@@ -162,17 +162,53 @@ def _pub_status_icons(pubs: list, is_past: bool) -> str:
 
 
 def build_token_section(token_statuses: list) -> str:
+    configured = [ts for ts in token_statuses if ts.configured]
+    active_count = sum(1 for ts in configured if ts.valid)
+    total_configured = len(configured)
+
+    if total_configured > 0 and active_count == total_configured:
+        summary_icon = "✅"
+        summary_text = f'<span style="color:#6ee7b7;font-weight:700;">Все працює — {active_count}/{total_configured} платформ активні</span>'
+    elif active_count > 0:
+        summary_icon = "⚠️"
+        summary_text = f'<span style="color:#fbbf24;font-weight:700;">{active_count}/{total_configured} платформ активні</span>'
+    else:
+        summary_icon = "❌"
+        summary_text = '<span style="color:#f87171;font-weight:700;">Жодна платформа не працює</span>'
+
+    summary_bar = (
+        '<div style="background:#16213e;border:1px solid #262640;border-radius:8px;'
+        'padding:14px 18px;margin:12px 0 16px;display:flex;align-items:center;">'
+        f'<span style="font-size:22px;margin-right:12px;">{summary_icon}</span>'
+        f'<span style="font-size:15px;">{summary_text}</span>'
+        '</div>'
+    )
+
     rows = ""
     for ts in token_statuses:
         if not ts.configured:
-            status_html = '<span style="color:#64748b;">не налаштовано</span>'
+            auto_html = '<span style="color:#64748b;font-style:italic;">не налаштовано</span>'
+            token_html = "—"
             expiry_html = "—"
+            days_html = "—"
         elif not ts.valid:
-            status_html = '<span style="color:#f87171;font-weight:700;">❌ НЕВАЛІДНИЙ</span>'
-            expiry_html = ts.error or "—"
+            auto_html = '<span style="color:#f87171;font-weight:700;">❌ помилка</span>'
+            token_html = f'<span style="color:#94a3b8;">{ts.token_source or "—"}</span>'
+            expiry_html = f'<span style="color:#f87171;font-size:12px;">{ts.error or "—"}</span>'
+            days_html = "—"
         else:
-            status_html = '<span style="color:#6ee7b7;">✅ активний</span>'
+            auto_html = '<span style="color:#6ee7b7;font-weight:700;">✅ працює</span>'
+            token_html = f'<span style="color:#94a3b8;">{ts.token_source or "—"}</span>'
             expiry_html = ts.expires_at.strftime("%Y-%m-%d") if ts.expires_at else "безстроковий"
+            if ts.days_remaining is not None:
+                if ts.days_remaining <= 5:
+                    days_html = f'<span style="color:#f87171;font-weight:700;">{ts.days_remaining} дн.</span>'
+                elif ts.days_remaining <= 14:
+                    days_html = f'<span style="color:#fbbf24;">{ts.days_remaining} дн.</span>'
+                else:
+                    days_html = f'<span style="color:#6ee7b7;">{ts.days_remaining} дн.</span>'
+            else:
+                days_html = "—"
 
         warning = ""
         if ts.days_remaining is not None and ts.days_remaining <= 5:
@@ -185,21 +221,11 @@ def build_token_section(token_statuses: list) -> str:
                 '</div></td></tr>'
             )
 
-        if ts.days_remaining is not None:
-            if ts.days_remaining <= 5:
-                days_html = f'<span style="color:#f87171;font-weight:700;">{ts.days_remaining} дн.</span>'
-            elif ts.days_remaining <= 14:
-                days_html = f'<span style="color:#fbbf24;">{ts.days_remaining} дн.</span>'
-            else:
-                days_html = f'<span style="color:#6ee7b7;">{ts.days_remaining} дн.</span>'
-        else:
-            days_html = "—"
-
         rows += (
             f'<tr>'
             f'<td style="padding:10px 14px;border-bottom:1px solid #262640;font-weight:600;">{ts.platform}</td>'
-            f'<td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">токен</td>'
-            f'<td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{status_html}</td>'
+            f'<td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{auto_html}</td>'
+            f'<td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{token_html}</td>'
             f'<td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{expiry_html}</td>'
             f'<td style="padding:10px 8px;border-bottom:1px solid #262640;text-align:center;">{days_html}</td>'
             f'</tr>{warning}'
@@ -207,12 +233,13 @@ def build_token_section(token_statuses: list) -> str:
 
     return (
         '<h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #f59e0b;'
-        'padding-bottom:6px;margin-top:32px;">Стан токенів</h2>'
+        'padding-bottom:6px;margin-top:32px;">Стан автоматизації соцмереж</h2>'
+        f'{summary_bar}'
         '<table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;">'
         '<thead><tr style="background:#1a1a2e;">'
         '<th style="padding:10px 14px;text-align:left;color:#94a3b8;font-weight:400;">Соцмережа</th>'
-        '<th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Тип</th>'
-        '<th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Статус</th>'
+        '<th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Автоматизація</th>'
+        '<th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Токен</th>'
         '<th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Дійсний до</th>'
         '<th style="padding:10px 8px;text-align:center;color:#94a3b8;font-weight:400;">Залишилось</th>'
         f'</tr></thead><tbody>{rows}</tbody></table>'
