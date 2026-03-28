@@ -285,39 +285,58 @@ async def _get_instagram_token() -> str | None:
     return settings.instagram_access_token or None
 
 
+async def _discover_ig_business_id(token: str) -> str | None:
+    """Auto-discover Instagram Business Account ID from the Facebook Page."""
+    if not settings.facebook_page_id:
+        return None
+    try:
+        client = await _http_client()
+        resp = await client.get(
+            f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}",
+            params={"access_token": token, "fields": "instagram_business_account"},
+        )
+        data = resp.json()
+        ig_id = data.get("instagram_business_account", {}).get("id")
+        if ig_id:
+            logger.info("Discovered Instagram Business Account ID: %s", ig_id)
+        return ig_id
+    except Exception:
+        logger.exception("Failed to discover IG Business Account")
+        return None
+
+
 async def _collect_instagram(date_str: str) -> dict:
     """Fetch Instagram stats via Graph API + DB."""
     stats = EMPTY_STATS.copy()
-
-    if not settings.instagram_user_id:
-        return stats
 
     token = await _get_instagram_token()
     if not token:
         return stats
 
+    ig_user_id = settings.instagram_user_id
     client = await _http_client()
 
     try:
         resp = await client.get(
-            f"{FACEBOOK_GRAPH_API}/{settings.instagram_user_id}",
-            params={
-                "fields": "followers_count,media_count",
-                "access_token": token,
-            },
+            f"{FACEBOOK_GRAPH_API}/{ig_user_id}",
+            params={"fields": "followers_count,media_count", "access_token": token},
         )
         data = resp.json()
         if "error" not in data:
             stats["subscribers"] = data.get("followers_count", 0)
         else:
-            logger.warning("Instagram API error (subscribers): %s", data["error"].get("message"))
-            resp2 = await client.get(
-                f"{INSTAGRAM_GRAPH_API}/{settings.instagram_user_id}",
-                params={"fields": "followers_count,media_count", "access_token": token},
-            )
-            data2 = resp2.json()
-            if "error" not in data2:
-                stats["subscribers"] = data2.get("followers_count", 0)
+            logger.warning("Instagram user_id %s failed, trying auto-discovery...", ig_user_id)
+            discovered_id = await _discover_ig_business_id(token)
+            if discovered_id:
+                resp2 = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{discovered_id}",
+                    params={"fields": "followers_count,media_count", "access_token": token},
+                )
+                data2 = resp2.json()
+                if "error" not in data2:
+                    stats["subscribers"] = data2.get("followers_count", 0)
+                    logger.info("Instagram subscribers from discovered ID %s: %d",
+                                discovered_id, stats["subscribers"])
     except Exception:
         logger.exception("Failed to get Instagram subscriber count")
 
