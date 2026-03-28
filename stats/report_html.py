@@ -267,11 +267,10 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
             f'</tr>'
         )
 
-    chart_activity = make_monthly_chart(
-        month_data, ["subscribers", "comments", "views"],
-        "Підписники + Коментарі + Перегляди за місяць")
     chart_subs = make_monthly_chart(
         month_data, ["subscribers"], "Підписники по місяцях")
+    chart_comments = make_monthly_chart(
+        month_data, ["comments"], "Коментарі по місяцях")
 
     months_sorted = sorted({m for p in month_data.values() for m in p})
     month_headers = "".join(
@@ -279,6 +278,7 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
         for m in months_sorted
     )
     subs_rows = ""
+    comments_rows = ""
     views_rows = ""
     for pv in month_data:
         label = PLATFORM_LABELS.get(pv, pv)
@@ -291,6 +291,15 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
         subs_rows += (
             f'<tr><td style="padding:8px 10px;border-bottom:1px solid #262640;">'
             f'<span style="color:{color};font-weight:600;">{label}</span></td>{cells}</tr>'
+        )
+        ccells = "".join(
+            f'<td style="padding:8px 10px;text-align:center;">'
+            f'{month_data[pv].get(m, {}).get("comments", 0)}</td>'
+            for m in months_sorted
+        )
+        comments_rows += (
+            f'<tr><td style="padding:8px 10px;border-bottom:1px solid #262640;">'
+            f'<span style="color:{color};font-weight:600;">{label}</span></td>{ccells}</tr>'
         )
         vcells = "".join(
             f'<td style="padding:8px 10px;text-align:center;">'
@@ -323,16 +332,23 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
     </tr></thead>
     <tbody>{rows_html}</tbody>
   </table>
-  <h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #3b82f6;padding-bottom:6px;margin-top:32px;">Графік за місяць</h2>
-  <img src="data:image/png;base64,{chart_activity}" style="width:100%;border-radius:8px;margin:12px 0;" alt="chart"/>
   <h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #a78bfa;padding-bottom:6px;margin-top:32px;">Підписники по місяцях</h2>
-  <img src="data:image/png;base64,{chart_subs}" style="width:100%;border-radius:8px;margin:12px 0;" alt="chart"/>
+  <img src="data:image/png;base64,{chart_subs}" style="width:100%;border-radius:8px;margin:12px 0;" alt="subscribers chart"/>
   <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;margin-top:8px;">
     <thead><tr style="background:#1a1a2e;">
       <th style="padding:8px 10px;text-align:left;color:#94a3b8;font-weight:400;">Платформа</th>
       {month_headers}
     </tr></thead>
     <tbody>{subs_rows}</tbody>
+  </table>
+  <h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #f59e0b;padding-bottom:6px;margin-top:32px;">Коментарі по місяцях</h2>
+  <img src="data:image/png;base64,{chart_comments}" style="width:100%;border-radius:8px;margin:12px 0;" alt="comments chart"/>
+  <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;margin-top:8px;">
+    <thead><tr style="background:#1a1a2e;">
+      <th style="padding:8px 10px;text-align:left;color:#94a3b8;font-weight:400;">Платформа</th>
+      {month_headers}
+    </tr></thead>
+    <tbody>{comments_rows}</tbody>
   </table>
   <h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #38bdf8;padding-bottom:6px;margin-top:32px;">Перегляди по місяцях</h2>
   <img src="data:image/png;base64,{chart_views}" style="width:100%;border-radius:8px;margin:12px 0;" alt="views chart"/>
