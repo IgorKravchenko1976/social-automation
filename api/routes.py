@@ -720,13 +720,19 @@ async def debug_test_ig_subs():
             discovered = r.json().get("instagram_business_account", {}).get("id")
             report["ig_discovered_from_page"] = discovered
 
-            test_id = ig_user_id or discovered
-            if test_id:
+            if ig_user_id:
                 r2 = await client.get(
-                    f"{FACEBOOK_GRAPH_API}/{test_id}",
+                    f"{FACEBOOK_GRAPH_API}/{ig_user_id}",
                     params={"fields": "followers_count,media_count,username", "access_token": token},
                 )
-                report["ig_profile"] = r2.json()
+                report["configured_id_result"] = r2.json()
+
+            if discovered:
+                r3 = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{discovered}",
+                    params={"fields": "followers_count,media_count,username", "access_token": token},
+                )
+                report["discovered_id_result"] = r3.json()
 
     return report
 
