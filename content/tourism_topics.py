@@ -28,7 +28,66 @@ BANNED_RSS_KEYWORDS = [
     "конгрес", "senate", "сенат", "pentagon", "пентагон",
     "weapon", "зброя", "invasion", "вторгн", "kremlin", "кремл",
     "pearl harbor", "attack on iran",
+    # Occupied / annexed territories — ABSOLUTE BAN
+    "крим", "crimea", "ялта", "yalta", "севастопол", "sevastopol",
+    "сімферопол", "simferopol", "алушт", "alushta", "феодосі", "feodosia",
+    "євпаторі", "evpatoria", "керч", "kerch", "судак", "sudak",
+    "бахчисарай", "bakhchysarai", "коктебел", "koktebel",
+    # War zones / Occupied east
+    "донецьк", "donetsk", "луганськ", "luhansk", "lugansk",
+    "маріупол", "mariupol", "горлівк", "horlivka", "макіївк", "makiivka",
+    "бердянськ", "berdyansk", "мелітопол", "melitopol",
+    # Russia cities
+    "moscow", "санкт-петербург", "st. petersburg", "петербург",
+    "petersburg", "сочі", "sochi", "казань", "kazan",
+    # Belarus
+    "білорусь", "belarus", "мінськ", "minsk",
 ]
+
+# ── BLOCKED TERRITORIES — safety filter for ALL generated content ─────
+# Catches content about occupied, annexed, war-zone territories and Russia.
+# Applied to AI-generated text AFTER generation, as a hard block.
+BLOCKED_TERRITORY_KEYWORDS = [
+    # Crimea (all) — annexed by Russia
+    "крим", "crimea", "ялта", "yalta", "ялт", "севастопол", "sevastopol",
+    "сімферопол", "simferopol", "алушт", "alushta", "феодосі", "feodosia",
+    "євпаторі", "evpatoria", "керч", "kerch", "судак", "sudak",
+    "бахчисарай", "bakhchysarai", "коктебел", "koktebel", "гурзуф",
+    "gurzuf", "форос", "foros", "балаклав", "balaklava", "партеніт",
+    "масандр", "нікітськ", "ай-петрі", "ai-petri", "ласточкін",
+    # Donetsk / Luhansk oblasts — war zone
+    "донецьк", "donetsk", "луганськ", "luhansk", "lugansk",
+    "маріупол", "mariupol", "горлівк", "horlivka", "макіївк", "makiivka",
+    "слов'янськ", "краматорськ", "бахмут", "сєвєродонецьк", "лисичанськ",
+    # Other temporarily occupied cities
+    "бердянськ", "berdyansk", "мелітопол", "melitopol",
+    "токмак", "енергодар", "нова каховк",
+    # Russia — complete ban
+    "росія", "россия", "russia", "москва", "moscow", "москв",
+    "санкт-петербург", "st. petersburg", "saint petersburg", "петербург",
+    "petersburg", "сочі", "sochi", "казань", "kazan",
+    "новосибірськ", "novosibirsk", "єкатеринбург", "ekaterinburg",
+    "нижній новгород", "nizhny novgorod", "владивосток", "vladivostok",
+    "калінінград", "kaliningrad", "мурманськ", "murmansk",
+    "красноярськ", "krasnoyarsk", "самара", "samara", "волгоград",
+    "volgograd", "камчатка", "kamchatka", "байкал", "baikal",
+    "транссибірськ", "trans-siberian", "transsiberian",
+    "кремл", "kremlin", "путін", "putin",
+    # Belarus
+    "білорусь", "belarus", "мінськ", "minsk",
+]
+
+
+def contains_blocked_territory(text: str) -> str | None:
+    """Check if text mentions any blocked territory.
+
+    Returns the matched keyword or None if safe.
+    """
+    lower = text.lower()
+    for kw in BLOCKED_TERRITORY_KEYWORDS:
+        if kw in lower:
+            return kw
+    return None
 
 # ── Directions for AI topic generation ───────────────────────────────────
 # Each direction is BROAD — it covers many subtopics, locations, events,
@@ -80,7 +139,7 @@ LEISURE_DIRECTIONS = [
     "Столиці та мегаполіси світу (Нью-Йорк, Лондон, Дубай, Сідней — що подивитись, бюджет, транспорт)",
     "Чернівці, Кам'янець-Подільський та Поділля — архітектура, історія, локальна кухня, фестивалі",
     "Бюджетні подорожі та лайфхаки (як зекономити на перельотах, готелях, їжі — поради та трюки)",
-    "Подорожі потягом (Orient Express, Транссибірська магістраль, Інтерсіті Україна — маршрути, ціни, романтика)",
+    "Подорожі потягом (Orient Express, Glacier Express, Інтерсіті Україна, Eurostar — маршрути, ціни, романтика)",
 ]
 
 FEATURE_DIRECTIONS = [

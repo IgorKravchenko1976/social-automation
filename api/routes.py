@@ -1231,3 +1231,41 @@ async def get_stats(session: AsyncSession = Depends(get_session)):
         total_messages_out=msgs_out,
         messages_unanswered=unanswered,
     )
+
+
+# ── Territory safety audit ────────────────────────────────────────────────────
+
+@router.get("/api/debug/territory-audit", dependencies=[Depends(require_admin)])
+async def territory_audit(session: AsyncSession = Depends(get_session)):
+    """Scan all published posts for blocked territory mentions."""
+    from content.tourism_topics import contains_blocked_territory
+
+    result = await session.execute(
+        select(Post, Publication)
+        .join(Publication)
+        .where(Publication.status == PostStatus.PUBLISHED)
+        .order_by(desc(Post.created_at))
+        .limit(200)
+    )
+    rows = result.all()
+
+    flagged = []
+    for post, pub in rows:
+        text = (post.title or "") + " " + (post.content_raw or "") + " " + (pub.content_adapted or "")
+        blocked = contains_blocked_territory(text)
+        if blocked:
+            flagged.append({
+                "post_id": post.id,
+                "title": (post.title or "")[:120],
+                "platform": pub.platform,
+                "platform_post_id": pub.platform_post_id,
+                "published_at": str(pub.published_at) if pub.published_at else None,
+                "blocked_keyword": blocked,
+            })
+
+    return {
+        "scanned": len(rows),
+        "flagged": len(flagged),
+        "posts": flagged,
+        "action": "Delete these posts manually from each platform",
+    }

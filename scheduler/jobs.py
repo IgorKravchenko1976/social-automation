@@ -14,9 +14,10 @@ from config.settings import settings, get_today_start_utc, get_now_local, parse_
 from content.generator import (
     generate_post_text, generate_unique_topic,
     extract_location_coordinates, build_map_link,
-    translate_post,
+    translate_post, BlockedTerritoryError,
 )
 from content.fact_checker import fact_check_post, MAX_FACT_CHECK_RETRIES
+from content.tourism_topics import contains_blocked_territory
 from content.tourism_topics import (
     TOURISM_RSS_FEEDS, BANNED_RSS_KEYWORDS,
     ACTIVE_DIRECTIONS, LEISURE_DIRECTIONS, FEATURE_DIRECTIONS,
@@ -99,6 +100,9 @@ async def _get_recent_titles(session: AsyncSession, days: int = 60) -> list[str]
     return [row[0] for row in result.all() if row[0]]
 
 
+MAX_TERRITORY_RETRIES = 3
+
+
 async def _pick_unique_topic(
     session: AsyncSession,
     directions: list[str],
@@ -106,9 +110,16 @@ async def _pick_unique_topic(
     recent_titles: list[str],
 ) -> str:
     """Pick a random direction and ask AI to generate a unique topic within it."""
+    for attempt in range(MAX_TERRITORY_RETRIES):
+        direction = random.choice(directions)
+        try:
+            topic = await generate_unique_topic(direction, content_type, recent_titles)
+            return topic
+        except BlockedTerritoryError as e:
+            logger.warning("Territory block in topic (attempt %d/%d): %s",
+                           attempt + 1, MAX_TERRITORY_RETRIES, e.keyword)
     direction = random.choice(directions)
-    topic = await generate_unique_topic(direction, content_type, recent_titles)
-    return topic
+    return await generate_unique_topic(direction, content_type, recent_titles)
 
 
 async def _pick_feature_topic(
@@ -118,11 +129,20 @@ async def _pick_feature_topic(
     travel_context: str,
 ) -> str:
     """Generate a feature topic tied to a real travel context from today's posts."""
+    for attempt in range(MAX_TERRITORY_RETRIES):
+        direction = random.choice(directions)
+        try:
+            topic = await generate_unique_topic(
+                direction, "feature", recent_titles, travel_context=travel_context,
+            )
+            return topic
+        except BlockedTerritoryError as e:
+            logger.warning("Territory block in feature topic (attempt %d/%d): %s",
+                           attempt + 1, MAX_TERRITORY_RETRIES, e.keyword)
     direction = random.choice(directions)
-    topic = await generate_unique_topic(
+    return await generate_unique_topic(
         direction, "feature", recent_titles, travel_context=travel_context,
     )
-    return topic
 
 
 async def _enrich_post_with_geo(post: Post) -> None:
@@ -138,9 +158,13 @@ async def _enrich_post_with_geo(post: Post) -> None:
 
 
 def _is_banned(title: str, summary: str) -> bool:
-    """Check if an RSS entry contains banned political/military keywords."""
+    """Check if an RSS entry contains banned political/military keywords or blocked territories."""
     text = (title + " " + summary).lower()
-    return any(kw in text for kw in BANNED_RSS_KEYWORDS)
+    if any(kw in text for kw in BANNED_RSS_KEYWORDS):
+        return True
+    if contains_blocked_territory(title + " " + summary):
+        return True
+    return False
 
 
 async def _fetch_tourism_news(session, count: int = 2) -> list[dict]:
@@ -584,35 +608,52 @@ async def _generate_and_verify_text(
     If all retries fail, generates a safe version without specific dates/events.
     """
     last_suggestion = ""
+    territory_hint = ""
 
     for attempt in range(MAX_FACT_CHECK_RETRIES + 1):
-        if post.source == "rss":
-            source_text = post.content_raw
-            if attempt > 0:
-                source_text += (
-                    "\n\nУВАГА РЕДАКТОРА: попередня версія відхилена фактчекером. "
-                    f"Проблема: {last_suggestion}\n"
-                    "Перепиши ТОЧНО за оригіналом, НЕ додавай фактів від себе."
+        try:
+            if post.source == "rss":
+                source_text = post.content_raw
+                if attempt > 0:
+                    source_text += (
+                        "\n\nУВАГА РЕДАКТОРА: попередня версія відхилена фактчекером. "
+                        f"Проблема: {last_suggestion}\n"
+                        "Перепиши ТОЧНО за оригіналом, НЕ додавай фактів від себе."
+                        f"{territory_hint}"
+                    )
+                text = await generate_post_text(
+                    topic="", platform=platform,
+                    source_text=source_text,
+                    content_type="tourism_news",
                 )
-            text = await generate_post_text(
-                topic="", platform=platform,
-                source_text=source_text,
-                content_type="tourism_news",
-            )
-        else:
-            topic = post.content_raw
-            if attempt > 0:
-                topic += (
-                    f"\n\nУВАГА РЕДАКТОРА: попередня версія відхилена фактчекером. "
-                    f"Проблема: {last_suggestion}\n"
-                    "НЕ вигадуй конкретних дат та подій. "
-                    "Якщо не впевнений у даті — НЕ ПИШИ дату. "
-                    "Пиши лише загальновідомі та перевірені факти."
+            else:
+                topic = post.content_raw
+                if attempt > 0:
+                    topic += (
+                        f"\n\nУВАГА РЕДАКТОРА: попередня версія відхилена фактчекером. "
+                        f"Проблема: {last_suggestion}\n"
+                        "НЕ вигадуй конкретних дат та подій. "
+                        "Якщо не впевнений у даті — НЕ ПИШИ дату. "
+                        "Пиши лише загальновідомі та перевірені факти."
+                        f"{territory_hint}"
+                    )
+                text = await generate_post_text(
+                    topic=topic, platform=platform,
+                    content_type=content_type,
                 )
-            text = await generate_post_text(
-                topic=topic, platform=platform,
-                content_type=content_type,
+        except BlockedTerritoryError as e:
+            logger.warning(
+                "TERRITORY BLOCK: attempt %d/%d for %s post_id=%s: '%s'",
+                attempt + 1, MAX_FACT_CHECK_RETRIES + 1,
+                platform.value, post.id, e.keyword,
             )
+            last_suggestion = f"Заборонена територія: {e.keyword}"
+            territory_hint = (
+                "\nКРИТИЧНО: НЕ згадуй Крим, Донецьк, Луганськ, Маріуполь, "
+                "Росію, Білорусь — це ЗАБОРОНЕНІ території! "
+                "Напиши про інше, безпечне місце."
+            )
+            continue
 
         check = await fact_check_post(text, content_type)
         if check.passed:

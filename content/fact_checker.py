@@ -15,6 +15,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 
 from config.settings import settings, get_now_local
+from content.tourism_topics import contains_blocked_territory
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ FACT_CHECK_SYSTEM_PROMPT = """\
 3. ЛОКАЦІЇ: Чи правильне місце проведення для згаданої події?
 4. ЧИСЛА: Чи реалістичні ціни, відстані, місткість, роки?
 5. ЧАСОВА ВІДПОВІДНІСТЬ: Чи описані як поточні/майбутні події дійсно такі відносно сьогоднішньої дати?
+6. ЗАБОРОНЕНІ ТЕРИТОРІЇ: Пост НЕ ПОВИНЕН згадувати Крим (Ялта, Севастополь, Сімферополь,
+   будь-яке місто Криму), Донецьк, Луганськ, Маріуполь, окуповані території України,
+   Росію (Москва, Петербург, Сочі, будь-яке місто), Білорусь (Мінськ).
+   Якщо пост згадує БУДЬ-ЯКУ з цих територій — verdict = "FAIL" ОБОВ'ЯЗКОВО.
 
 === ВІДОМІ СПОРТИВНІ КАЛЕНДАРІ (обов'язково перевіряй!) ===
 Формула 1:
@@ -109,6 +114,17 @@ async def fact_check_post(post_text: str, content_type: str = "") -> FactCheckRe
     Returns FactCheckResult with passed=True if the post is factually sound.
     On API errors, returns passed=True to avoid blocking publishing.
     """
+    blocked = contains_blocked_territory(post_text)
+    if blocked:
+        logger.warning("TERRITORY BLOCK in fact-check: text contains '%s'", blocked)
+        return FactCheckResult(
+            passed=False,
+            claims=[{"claim": f"Згадка забороненої території: {blocked}", "status": "wrong",
+                     "reason": "Окупована/анексована територія або зона бойових дій"}],
+            summary=f"Пост містить заборонену територію: {blocked}",
+            suggestion="Повністю переписати пост без згадки окупованих територій, Росії або зон бойових дій",
+        )
+
     client = _get_client()
     today_str = get_now_local().strftime("%d %B %Y (%A)")
     system = FACT_CHECK_SYSTEM_PROMPT.format(today=today_str)
