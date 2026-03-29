@@ -51,10 +51,11 @@ async def emergency_delete(search_text: str) -> dict:
             platform_result = await _delete_from_platform(pub)
             post_report["platforms"].append(platform_result)
 
+        await _mark_post_deleted(post.id)
+
         blog_result = await _delete_from_blog(post.id)
         post_report["blog"] = blog_result
 
-        await _mark_post_deleted(post.id)
         report["results"].append(post_report)
 
     deleted_count = sum(
@@ -191,7 +192,11 @@ async def _get_post_by_pub(pub: Publication) -> Post | None:
 
 
 async def _delete_from_blog(post_id: int) -> dict:
-    """Delete blog post HTML file and remove from posts.json index."""
+    """Delete blog post HTML file and remove from posts.json index.
+
+    Uses targeted SFTP deletion instead of full regeneration to avoid
+    re-creating the post from DB records that may still be transitioning.
+    """
     result = {"deleted": False, "detail": ""}
 
     blog_dir = Path(settings.data_dir) / "blog"
@@ -228,15 +233,79 @@ async def _delete_from_blog(post_id: int) -> dict:
         result["detail"] = f"Видалено: {', '.join(files_deleted)}"
 
         try:
-            from scheduler.blog_sync import sync_blog_to_vps
-            synced = await sync_blog_to_vps()
-            result["detail"] += f" | VPS sync: {synced} файлів"
+            vps_detail = _sftp_delete_post(post_id, posts_json if posts_json.is_file() else None)
+            result["detail"] += f" | VPS: {vps_detail}"
         except Exception as e:
             result["detail"] += f" | VPS sync failed: {e}"
     else:
         result["detail"] = "Файли блогу не знайдено (можливо вже видалено)"
 
     return result
+
+
+def _sftp_delete_post(post_id: int, updated_posts_json: Path | None) -> str:
+    """Delete specific post files from VPS via SFTP and upload updated posts.json."""
+    try:
+        import paramiko
+    except ImportError:
+        return "paramiko not installed"
+
+    import io
+
+    host = settings.vps_ssh_host
+    port = settings.vps_ssh_port
+    user = settings.vps_ssh_user
+    password = settings.vps_ssh_password
+    key_data = settings.vps_ssh_key
+    remote_dir = settings.vps_blog_path
+
+    if not host or (not password and not key_data):
+        return "VPS SSH not configured"
+
+    pkey = None
+    if key_data:
+        try:
+            import paramiko as _p
+            pkey = _p.RSAKey.from_private_key(io.StringIO(key_data))
+        except Exception:
+            try:
+                pkey = _p.Ed25519Key.from_private_key(io.StringIO(key_data))
+            except Exception:
+                pass
+
+    if not pkey and not password:
+        return "No valid SSH credentials"
+
+    actions = []
+    try:
+        transport = paramiko.Transport((host, port))
+        if pkey:
+            transport.connect(username=user, pkey=pkey)
+        else:
+            transport.connect(username=user, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+
+        for fname in [f"post-{post_id}.html", f"thumb-{post_id}.jpg"]:
+            remote_path = f"{remote_dir}/{fname}"
+            try:
+                sftp.remove(remote_path)
+                actions.append(f"deleted {fname}")
+            except FileNotFoundError:
+                actions.append(f"{fname} not found on VPS")
+            except Exception as e:
+                actions.append(f"error deleting {fname}: {e}")
+
+        if updated_posts_json and updated_posts_json.is_file():
+            remote_json = f"{remote_dir}/posts.json"
+            sftp.put(str(updated_posts_json), remote_json)
+            actions.append("updated posts.json")
+
+        sftp.close()
+        transport.close()
+    except Exception as e:
+        actions.append(f"SFTP error: {e}")
+
+    return "; ".join(actions) if actions else "no actions"
 
 
 async def _mark_post_deleted(post_id: int) -> None:

@@ -38,6 +38,9 @@ async def sync_blog_to_vps() -> int:
     blog_files = [f for f in all_files if f.name != "sitemap.xml"]
     pushed = _sftp_push(blog_files)
 
+    valid_names = {f.name for f in blog_files}
+    _sftp_cleanup_orphans(valid_names)
+
     root_files: list[Path] = []
     if sitemap_file.is_file():
         root_files.append(sitemap_file)
@@ -125,6 +128,65 @@ def _fetch_website_files() -> list[Path]:
             logger.debug("Could not fetch %s from GitHub", fname)
     logger.info("Fetched %d website files from GitHub for VPS sync", len(result))
     return result
+
+
+def _sftp_cleanup_orphans(valid_names: set[str]) -> None:
+    """Remove post-*.html and thumb-*.jpg files from VPS that are no longer generated."""
+    try:
+        import paramiko
+    except ImportError:
+        return
+
+    host = settings.vps_ssh_host
+    port = settings.vps_ssh_port
+    user = settings.vps_ssh_user
+    password = settings.vps_ssh_password
+    key_data = settings.vps_ssh_key
+    remote_dir = settings.vps_blog_path
+
+    if not host or (not password and not key_data):
+        return
+
+    pkey = None
+    if key_data:
+        try:
+            pkey = paramiko.RSAKey.from_private_key(io.StringIO(key_data))
+        except Exception:
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key(io.StringIO(key_data))
+            except Exception:
+                pass
+
+    if not pkey and not password:
+        return
+
+    try:
+        transport = paramiko.Transport((host, port))
+        if pkey:
+            transport.connect(username=user, pkey=pkey)
+        else:
+            transport.connect(username=user, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+
+        remote_files = sftp.listdir(remote_dir)
+        removed = 0
+        for fname in remote_files:
+            is_post = fname.startswith("post-") and fname.endswith(".html")
+            is_thumb = fname.startswith("thumb-") and fname.endswith(".jpg")
+            if (is_post or is_thumb) and fname not in valid_names:
+                try:
+                    sftp.remove(f"{remote_dir}/{fname}")
+                    removed += 1
+                    logger.info("Removed orphan from VPS: %s", fname)
+                except Exception:
+                    logger.warning("Failed to remove orphan %s", fname, exc_info=True)
+
+        sftp.close()
+        transport.close()
+        if removed:
+            logger.info("Cleaned up %d orphaned files from VPS", removed)
+    except Exception:
+        logger.warning("SFTP cleanup failed", exc_info=True)
 
 
 def _sftp_push(files: list[Path]) -> int:
