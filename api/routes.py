@@ -1267,5 +1267,96 @@ async def territory_audit(session: AsyncSession = Depends(get_session)):
         "scanned": len(rows),
         "flagged": len(flagged),
         "posts": flagged,
-        "action": "Delete these posts manually from each platform",
+        "action": "Use /api/emergency-delete to remove flagged posts",
     }
+
+
+# ── Emergency post deletion ──────────────────────────────────────────────────
+
+@router.get("/api/emergency-delete", dependencies=[Depends(require_admin)])
+async def emergency_delete_page():
+    """Interactive page for emergency post deletion."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>🚨 Emergency Delete</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{background:#16213e;border-radius:16px;padding:40px;max-width:600px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.3)}
+h1{color:#e74c3c;margin-bottom:8px;font-size:28px}
+.subtitle{color:#a0a0a0;margin-bottom:24px}
+textarea{width:100%;height:120px;background:#0f3460;border:2px solid #e74c3c;border-radius:8px;color:#fff;padding:12px;font-size:15px;resize:vertical}
+textarea:focus{outline:none;border-color:#ff6b6b}
+button{width:100%;margin-top:16px;padding:14px;background:#e74c3c;color:white;border:none;border-radius:8px;font-size:18px;font-weight:bold;cursor:pointer;transition:all .2s}
+button:hover{background:#c0392b;transform:translateY(-1px)}
+button:disabled{background:#555;cursor:wait}
+#result{margin-top:20px;background:#0f3460;border-radius:8px;padding:16px;display:none;max-height:400px;overflow-y:auto}
+.found{color:#2ecc71;font-weight:bold}
+.not-found{color:#e74c3c;font-weight:bold}
+.platform-row{padding:6px 0;border-bottom:1px solid #1a1a2e;font-size:14px}
+.ok{color:#2ecc71}.fail{color:#e74c3c}.skip{color:#95a5a6}
+</style></head>
+<body><div class="container">
+<h1>🚨 Екстрене видалення</h1>
+<p class="subtitle">Вставте текст поста (або частину) — система знайде та видалить його з усіх платформ</p>
+<textarea id="text" placeholder="Вставте текст поста для пошуку та видалення..."></textarea>
+<button onclick="doDelete()" id="btn">🗑️ ЗНАЙТИ ТА ВИДАЛИТИ НЕГАЙНО</button>
+<div id="result"></div>
+</div>
+<script>
+async function doDelete(){
+  const text=document.getElementById('text').value.trim();
+  if(!text){alert('Введіть текст поста');return}
+  if(!confirm('УВАГА! Пост буде видалено з усіх платформ та блогу. Продовжити?'))return;
+  const btn=document.getElementById('btn');
+  const res=document.getElementById('result');
+  btn.disabled=true;btn.textContent='⏳ Видаляю...';
+  res.style.display='block';res.innerHTML='<p>Шукаю пост...</p>';
+  try{
+    const r=await fetch('/api/emergency-delete',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Admin-Key':new URLSearchParams(location.search).get('key')||''},
+      body:JSON.stringify({search_text:text})
+    });
+    const data=await r.json();
+    let html='<p><strong>'+data.summary+'</strong></p>';
+    if(data.posts_found===0){html+='<p class="not-found">Пости не знайдено в базі даних</p>';}
+    else{
+      for(const post of data.results||[]){
+        html+='<div style="margin:12px 0;padding:8px;background:#1a1a2e;border-radius:6px">';
+        html+='<p><strong>Post #'+post.post_id+':</strong> '+post.title+'</p>';
+        for(const p of post.platforms||[]){
+          const cls=p.deleted?'ok':(p.platform_post_id?'fail':'skip');
+          const icon=p.deleted?'✅':(p.platform_post_id?'❌':'⚪');
+          html+='<div class="platform-row"><span class="'+cls+'">'+icon+' '+p.platform_label+'</span> — '+p.detail+'</div>';
+        }
+        if(post.blog){
+          const cls=post.blog.deleted?'ok':'skip';
+          const icon=post.blog.deleted?'✅':'⚪';
+          html+='<div class="platform-row"><span class="'+cls+'">'+icon+' Блог</span> — '+post.blog.detail+'</div>';
+        }
+        html+='</div>';
+      }
+    }
+    html+='<p style="color:#a0a0a0;font-size:12px;margin-top:12px">Звіт надіслано на email</p>';
+    res.innerHTML=html;
+  }catch(e){res.innerHTML='<p class="not-found">Помилка: '+e.message+'</p>';}
+  btn.disabled=false;btn.textContent='🗑️ ЗНАЙТИ ТА ВИДАЛИТИ НЕГАЙНО';
+}
+</script></body></html>""")
+
+
+@router.post("/api/emergency-delete", dependencies=[Depends(require_admin)])
+async def emergency_delete_action(body: dict):
+    """Execute emergency deletion. Body: {"search_text": "..."}"""
+    from scheduler.emergency_delete import emergency_delete
+
+    search_text = body.get("search_text", "").strip()
+    if not search_text:
+        raise HTTPException(400, "search_text is required")
+    if len(search_text) < 5:
+        raise HTTPException(400, "search_text must be at least 5 characters")
+
+    result = await emergency_delete(search_text)
+    return result

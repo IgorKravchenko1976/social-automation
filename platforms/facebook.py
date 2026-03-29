@@ -77,6 +77,24 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
             logger.exception("Facebook video publish failed")
             return PublishResult(success=False, error=str(e))
 
+    async def delete_post(self, platform_post_id: str) -> tuple[bool, str]:
+        """Delete a post from Facebook. Returns (success, detail)."""
+        try:
+            await self._ensure_token()
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.delete(
+                    f"{GRAPH_API_BASE}/{platform_post_id}",
+                    params={"access_token": self._token},
+                )
+                data = resp.json()
+                if data.get("success") or data is True:
+                    return True, f"Deleted FB post {platform_post_id}"
+                if "error" in data:
+                    return False, f"API error: {data['error'].get('message', data['error'])}"
+                return False, f"Unexpected response: {data}"
+        except Exception as e:
+            return False, f"Exception: {e}"
+
     async def get_new_messages(self) -> list[dict]:
         """Fetch recent comments on page posts."""
         try:

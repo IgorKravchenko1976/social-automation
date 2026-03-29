@@ -197,6 +197,27 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
             logger.exception("Facebook image upload for Instagram failed")
             return None
 
+    async def delete_post(self, platform_post_id: str) -> tuple[bool, str]:
+        """Delete a media post from Instagram via Graph API."""
+        try:
+            creds = await self._resolve_credentials()
+            if not creds:
+                return False, "No valid Instagram credentials"
+            token, _ = creds
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.delete(
+                    f"{GRAPH_API}/{platform_post_id}",
+                    params={"access_token": token},
+                )
+                data = resp.json()
+                if data.get("success") or data is True:
+                    return True, f"Deleted IG media {platform_post_id}"
+                if "error" in data:
+                    return False, f"API error: {data['error'].get('message', data['error'])}"
+                return False, f"Unexpected response: {data}"
+        except Exception as e:
+            return False, f"Exception: {e}"
+
     # ── Video, messages, replies ─────────────────────────────────────────
 
     async def publish_video(self, text: str, video_path: str) -> PublishResult:

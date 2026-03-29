@@ -97,6 +97,20 @@ class TelegramPlatform(BasePlatform):
             logger.exception("Telegram video publish failed")
             return PublishResult(success=False, error=str(e))
 
+    async def delete_post(self, platform_post_id: str) -> tuple[bool, str]:
+        """Delete a message from the Telegram channel. Returns (success, detail)."""
+        try:
+            data = await tg_request(
+                "deleteMessage",
+                chat_id=settings.telegram_channel_id,
+                message_id=int(platform_post_id),
+            )
+            if data.get("ok"):
+                return True, f"Deleted message #{platform_post_id}"
+            return False, f"API error: {data.get('description', data)}"
+        except Exception as e:
+            return False, f"Exception: {e}"
+
     async def send_reply(self, chat_id: str, text: str, reply_to: Optional[int] = None) -> bool:
         try:
             params = {"chat_id": int(chat_id), "text": text}
