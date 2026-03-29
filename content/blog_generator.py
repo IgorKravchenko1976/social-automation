@@ -556,6 +556,20 @@ async def generate_all_published() -> list[Path]:
     if sitemap_path:
         generated.append(sitemap_path)
 
+    valid_ids = {post.id for post, _ in rows}
+    blog_dir = _blog_dir()
+    for orphan in blog_dir.glob("post-*.html"):
+        try:
+            pid = int(orphan.stem.split("-", 1)[1])
+            if pid not in valid_ids:
+                orphan.unlink()
+                thumb = blog_dir / f"thumb-{pid}.jpg"
+                if thumb.is_file():
+                    thumb.unlink()
+                logger.info("Removed orphaned local blog files for post %d", pid)
+        except (ValueError, IndexError):
+            pass
+
     logger.info("Blog generation complete: %d pages + index + sitemap", len(rows))
     return generated
 

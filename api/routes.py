@@ -259,16 +259,40 @@ async def public_blog_sync():
 
 @public_router.get("/debug/blog-delete-vps/{post_id}")
 async def blog_delete_from_vps(post_id: int):
-    """Delete a specific blog post from VPS via SFTP."""
+    """Delete a specific blog post from VPS and local Railway storage."""
     from scheduler.emergency_delete import _sftp_delete_post
     from pathlib import Path
+    import json as _json
+
     blog_dir = Path(settings.data_dir) / "blog"
+    local_actions = []
+
+    for fname in [f"post-{post_id}.html", f"thumb-{post_id}.jpg"]:
+        fp = blog_dir / fname
+        if fp.is_file():
+            fp.unlink()
+            local_actions.append(f"local: deleted {fname}")
+        else:
+            local_actions.append(f"local: {fname} not found")
+
     posts_json = blog_dir / "posts.json"
+    if posts_json.is_file():
+        try:
+            posts = _json.loads(posts_json.read_text(encoding="utf-8"))
+            before = len(posts)
+            posts = [p for p in posts if p.get("id") != post_id]
+            if len(posts) < before:
+                posts_json.write_text(_json.dumps(posts, ensure_ascii=False, default=str), encoding="utf-8")
+                local_actions.append("local: posts.json updated")
+        except Exception as e:
+            local_actions.append(f"local: posts.json error: {e}")
+
     try:
-        detail = _sftp_delete_post(post_id, posts_json if posts_json.is_file() else None)
-        return {"status": "ok", "post_id": post_id, "detail": detail}
+        vps_detail = _sftp_delete_post(post_id, posts_json if posts_json.is_file() else None)
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        vps_detail = f"error: {e}"
+
+    return {"status": "ok", "post_id": post_id, "local": local_actions, "vps": vps_detail}
 
 
 @public_router.get("/debug/vps-files")
