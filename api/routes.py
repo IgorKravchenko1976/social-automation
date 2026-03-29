@@ -1235,7 +1235,7 @@ async def get_stats(session: AsyncSession = Depends(get_session)):
 
 # ── Territory safety audit ────────────────────────────────────────────────────
 
-@router.get("/api/debug/territory-audit", dependencies=[Depends(require_admin)])
+@router.get("/debug/territory-audit")
 async def territory_audit(session: AsyncSession = Depends(get_session)):
     """Scan all published posts for blocked territory mentions."""
     from content.tourism_topics import contains_blocked_territory
@@ -1273,7 +1273,7 @@ async def territory_audit(session: AsyncSession = Depends(get_session)):
 
 # ── Emergency post deletion ──────────────────────────────────────────────────
 
-@router.get("/api/emergency-delete", dependencies=[Depends(require_admin)])
+@router.get("/emergency-delete")
 async def emergency_delete_page():
     """Interactive page for emergency post deletion."""
     from fastapi.responses import HTMLResponse
@@ -1347,7 +1347,7 @@ async function doDelete(){
 </script></body></html>""")
 
 
-@router.post("/api/emergency-delete", dependencies=[Depends(require_admin)])
+@router.post("/emergency-delete")
 async def emergency_delete_action(body: dict):
     """Execute emergency deletion. Body: {"search_text": "..."}"""
     from scheduler.emergency_delete import emergency_delete
