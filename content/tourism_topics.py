@@ -21,14 +21,15 @@ TOURISM_RSS_FEEDS = [
 ]
 
 BANNED_RSS_KEYWORDS = [
+    # Politics / military
     "russia", "росія", "російськ", "москв", "putin", "путін",
-    "trump", "трамп", "iran", "іран", "war", "війн", "military",
+    "trump", "трамп", "war", "війн", "military",
     "missile", "ракет", "sanction", "санкці", "nato", "нато",
     "nuclear", "ядер", "bomb", "election", "вибор", "congress",
     "конгрес", "senate", "сенат", "pentagon", "пентагон",
     "weapon", "зброя", "invasion", "вторгн", "kremlin", "кремл",
-    "pearl harbor", "attack on iran",
-    # Occupied / annexed territories — ABSOLUTE BAN
+    "pearl harbor",
+    # Occupied / annexed territories
     "крим", "crimea", "ялта", "yalta", "севастопол", "sevastopol",
     "сімферопол", "simferopol", "алушт", "alushta", "феодосі", "feodosia",
     "євпаторі", "evpatoria", "керч", "kerch", "судак", "sudak",
@@ -37,32 +38,58 @@ BANNED_RSS_KEYWORDS = [
     "донецьк", "donetsk", "луганськ", "luhansk", "lugansk",
     "маріупол", "mariupol", "горлівк", "horlivka", "макіївк", "makiivka",
     "бердянськ", "berdyansk", "мелітопол", "melitopol",
-    # Russia cities
+    # Russia / Belarus cities
     "moscow", "санкт-петербург", "st. petersburg", "петербург",
     "petersburg", "сочі", "sochi", "казань", "kazan",
-    # Belarus
     "білорусь", "belarus", "мінськ", "minsk",
+    # Sanctioned countries
+    "іран", "iran", "тегеран", "tehran",
+    "north korea", "північна корея", "пхеньян", "pyongyang",
+    "сирія", "syria", "дамаск", "damascus",
+    "куба", "cuba", "венесуела", "venezuela",
+    "м'янма", "myanmar", "burma", "бірма",
+    # Terrorism / conflict / danger zones
+    "афганістан", "afghanistan", "кабул", "kabul", "талібан", "taliban",
+    "сомалі", "somalia", "ємен", "yemen",
+    "лівія", "libya", "ірак", "iraq",
+    "south sudan", "південний судан",
+    "центральноафриканськ", "central african",
+    "малі ", "mali ", "буркіна", "burkina",
+    "нігер", "niger", "чад ", "chad ",
+    "гаїті", "haiti",
+    "isis", "ісіс", "al-qaeda", "аль-каїда", "boko haram",
+    # Terrorism / danger generic
+    "терорис", "terroris", "теракт", "терор",
+    "викраден", "kidnap", "заручник", "hostage",
+    "genocide", "геноцид",
+    # Natural disasters keywords
+    "tsunami", "цунамі", "earthquake", "землетрус",
+    "eruption", "виверження", "hurricane", "ураган",
+    "typhoon", "тайфун", "tornado", "торнадо",
+    "flood", "повін", "повен", "wildfire", "лісов пожеж",
+    "avalanche", "лавин",
 ]
 
 # ── BLOCKED TERRITORIES — safety filter for ALL generated content ─────
-# Catches content about occupied, annexed, war-zone territories and Russia.
+# Catches content about occupied, annexed, war-zone, sanctioned,
+# terrorism-risk, and dangerous-for-tourists territories.
 # Applied to AI-generated text AFTER generation, as a hard block.
 BLOCKED_TERRITORY_KEYWORDS = [
-    # Crimea (all) — annexed by Russia
+    # ─── Crimea (all) — annexed by Russia ───
     "крим", "crimea", "ялта", "yalta", "ялт", "севастопол", "sevastopol",
     "сімферопол", "simferopol", "алушт", "alushta", "феодосі", "feodosia",
     "євпаторі", "evpatoria", "керч", "kerch", "судак", "sudak",
     "бахчисарай", "bakhchysarai", "коктебел", "koktebel", "гурзуф",
     "gurzuf", "форос", "foros", "балаклав", "balaklava", "партеніт",
     "масандр", "нікітськ", "ай-петрі", "ai-petri", "ласточкін",
-    # Donetsk / Luhansk oblasts — war zone
+    # ─── Donetsk / Luhansk oblasts — war zone ───
     "донецьк", "donetsk", "луганськ", "luhansk", "lugansk",
     "маріупол", "mariupol", "горлівк", "horlivka", "макіївк", "makiivka",
     "слов'янськ", "краматорськ", "бахмут", "сєвєродонецьк", "лисичанськ",
-    # Other temporarily occupied cities
+    # ─── Other temporarily occupied Ukrainian cities ───
     "бердянськ", "berdyansk", "мелітопол", "melitopol",
     "токмак", "енергодар", "нова каховк",
-    # Russia — complete ban
+    # ─── Russia — complete ban ───
     "росія", "россия", "russia", "москва", "moscow", "москв",
     "санкт-петербург", "st. petersburg", "saint petersburg", "петербург",
     "petersburg", "сочі", "sochi", "казань", "kazan",
@@ -73,8 +100,34 @@ BLOCKED_TERRITORY_KEYWORDS = [
     "volgograd", "камчатка", "kamchatka", "байкал", "baikal",
     "транссибірськ", "trans-siberian", "transsiberian",
     "кремл", "kremlin", "путін", "putin",
-    # Belarus
+    # ─── Belarus ───
     "білорусь", "belarus", "мінськ", "minsk",
+    # ─── Sanctioned countries ───
+    "північна корея", "north korea", "пхеньян", "pyongyang",
+    "іран", "iran", "тегеран", "tehran",
+    "сирія", "syria", "дамаск", "damascus", "алеппо", "aleppo",
+    "куба", "cuba", "гавана", "havana",
+    "венесуела", "venezuela", "каракас", "caracas",
+    "м'янма", "myanmar", "burma", "бірма", "янгон", "yangon",
+    # ─── Terrorism / Active conflict zones — tourist killings ───
+    "афганістан", "afghanistan", "кабул", "kabul", "талібан", "taliban",
+    "сомалі", "somalia", "могадішо", "mogadishu",
+    "ємен", "yemen", "сана", "sanaa",
+    "лівія", "libya", "тріполі", "tripoli",
+    "ірак", "iraq", "багдад", "baghdad",
+    "південний судан", "south sudan",
+    "центральноафриканськ", "central african republic",
+    "малі", "mali", "бамако", "bamako",
+    "буркіна-фасо", "burkina faso",
+    "нігер", "niger", "ніамей", "niamey",
+    "чад", "chad", "нджамена", "n'djamena",
+    "гаїті", "haiti", "порт-о-пренс", "port-au-prince",
+    "ісіс", "isis", "ісламська держава", "islamic state",
+    "аль-каїда", "al-qaeda", "боко харам", "boko haram",
+    # ─── Generic danger keywords ───
+    "терорис", "terroris", "теракт", "терор",
+    "викраден", "kidnap", "заручник", "hostage",
+    "genocide", "геноцид",
 ]
 
 
