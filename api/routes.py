@@ -271,6 +271,60 @@ async def blog_delete_from_vps(post_id: int):
         return {"status": "error", "error": str(e)}
 
 
+@public_router.get("/debug/vps-files")
+async def vps_list_files():
+    """List files on VPS blog directory via SFTP for diagnostics."""
+    import io
+    try:
+        import paramiko
+    except ImportError:
+        return {"error": "paramiko not installed"}
+
+    host = settings.vps_ssh_host
+    port = settings.vps_ssh_port
+    user = settings.vps_ssh_user
+    password = settings.vps_ssh_password
+    key_data = settings.vps_ssh_key
+    remote_dir = settings.vps_blog_path
+
+    if not host:
+        return {"error": "VPS_SSH_HOST not configured"}
+
+    pkey = None
+    if key_data:
+        try:
+            pkey = paramiko.RSAKey.from_private_key(io.StringIO(key_data))
+        except Exception:
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key(io.StringIO(key_data))
+            except Exception:
+                pass
+
+    try:
+        transport = paramiko.Transport((host, port))
+        if pkey:
+            transport.connect(username=user, pkey=pkey)
+        else:
+            transport.connect(username=user, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        files = sorted(sftp.listdir(remote_dir))
+        post_files = [f for f in files if f.startswith("post-") and f.endswith(".html")]
+        thumb_files = [f for f in files if f.startswith("thumb-")]
+        other_files = [f for f in files if f not in post_files and f not in thumb_files]
+        sftp.close()
+        transport.close()
+        return {
+            "remote_dir": remote_dir,
+            "total": len(files),
+            "post_files": post_files,
+            "thumb_files": thumb_files,
+            "other_files": other_files,
+            "has_post_61": "post-61.html" in files,
+        }
+    except Exception as e:
+        return {"error": str(e), "remote_dir": remote_dir}
+
+
 @public_router.get("/debug/regenerate-content")
 async def public_regenerate_content(limit: int = 3, offset: int = 0):
     """Re-generate full text for posts with short content_raw. Process in small batches."""
