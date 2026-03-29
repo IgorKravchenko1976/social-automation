@@ -198,11 +198,15 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
             return None
 
     async def delete_post(self, platform_post_id: str) -> tuple[bool, str]:
-        """Delete a media post from Instagram via Graph API."""
+        """Attempt to delete a media post from Instagram via Graph API.
+
+        NOTE: Instagram Graph API has very limited delete support.
+        Most media types cannot be deleted via API — manual deletion required.
+        """
         try:
             creds = await self._resolve_credentials()
             if not creds:
-                return False, "No valid Instagram credentials"
+                return False, "Немає токена — видаліть вручну з Instagram"
             token, _ = creds
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.delete(
@@ -213,8 +217,14 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                 if data.get("success") or data is True:
                     return True, f"Deleted IG media {platform_post_id}"
                 if "error" in data:
-                    return False, f"API error: {data['error'].get('message', data['error'])}"
-                return False, f"Unexpected response: {data}"
+                    err = data["error"].get("message", str(data["error"]))
+                    if "Unsupported delete" in err or "does not support" in err:
+                        return False, (
+                            f"Instagram API НЕ ПІДТРИМУЄ видалення постів. "
+                            f"ID: {platform_post_id} — ВИДАЛІТЬ ВРУЧНУ з Instagram."
+                        )
+                    return False, f"API error: {err}"
+                return False, f"Unexpected: {data}"
         except Exception as e:
             return False, f"Exception: {e}"
 

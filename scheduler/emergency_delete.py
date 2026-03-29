@@ -121,12 +121,18 @@ async def _delete_from_platform(pub: Publication) -> dict:
     }
 
     if not pub.platform_post_id:
-        result["detail"] = "Немає platform_post_id — пост не був опублікований"
-        return result
-
-    if pub.status != PostStatus.PUBLISHED:
-        result["detail"] = f"Статус {pub.status.value} — не опубліковано"
-        return result
+        if pub.platform == "facebook":
+            found_id = await _search_facebook_post(pub)
+            if found_id:
+                pub.platform_post_id = found_id
+                result["platform_post_id"] = found_id
+                result["detail"] = f"Знайдено через пошук: {found_id}"
+            else:
+                result["detail"] = "Немає platform_post_id і не знайдено через API пошук — видаліть вручну"
+                return result
+        else:
+            result["detail"] = "Немає platform_post_id — видаліть вручну з платформи"
+            return result
 
     try:
         platform_enum = Platform(pub.platform)
@@ -146,6 +152,42 @@ async def _delete_from_platform(pub: Publication) -> dict:
         result["detail"] = f"Помилка: {e}"
 
     return result
+
+
+async def _search_facebook_post(pub: Publication) -> str | None:
+    """Try to find a Facebook post by searching recent page feed."""
+    try:
+        from stats.token_renewer import get_active_token
+        token = await get_active_token("facebook") or settings.facebook_page_access_token
+        if not token or not settings.facebook_page_id:
+            return None
+
+        from config.platforms import FACEBOOK_GRAPH_API
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}/feed",
+                params={"access_token": token, "fields": "id,message", "limit": 25},
+            )
+            data = resp.json()
+            post_obj = await _get_post_by_pub(pub)
+            if not post_obj:
+                return None
+
+            search_text = (post_obj.title or "").lower()[:50]
+            for item in data.get("data", []):
+                msg = (item.get("message") or "").lower()
+                if search_text and search_text[:30] in msg:
+                    logger.info("Found FB post by text search: %s", item["id"])
+                    return item["id"]
+    except Exception as e:
+        logger.warning("Facebook post search failed: %s", e)
+    return None
+
+
+async def _get_post_by_pub(pub: Publication) -> Post | None:
+    async with async_session() as session:
+        result = await session.execute(select(Post).where(Post.id == pub.post_id))
+        return result.scalar_one_or_none()
 
 
 async def _delete_from_blog(post_id: int) -> dict:
