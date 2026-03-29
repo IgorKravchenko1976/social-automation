@@ -257,6 +257,20 @@ async def public_blog_sync():
         return {"status": "error", "error": str(e)}
 
 
+@public_router.get("/debug/blog-delete-vps/{post_id}")
+async def blog_delete_from_vps(post_id: int):
+    """Delete a specific blog post from VPS via SFTP."""
+    from scheduler.emergency_delete import _sftp_delete_post
+    from pathlib import Path
+    blog_dir = Path(settings.data_dir) / "blog"
+    posts_json = blog_dir / "posts.json"
+    try:
+        detail = _sftp_delete_post(post_id, posts_json if posts_json.is_file() else None)
+        return {"status": "ok", "post_id": post_id, "detail": detail}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @public_router.get("/debug/regenerate-content")
 async def public_regenerate_content(limit: int = 3, offset: int = 0):
     """Re-generate full text for posts with short content_raw. Process in small batches."""
