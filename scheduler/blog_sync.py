@@ -42,6 +42,7 @@ async def sync_blog_to_vps() -> int:
     if sitemap_file.is_file():
         root_files.append(sitemap_file)
     website_files = _fetch_website_files()
+    _inject_blog_links(website_files, blog_dir)
     if not sitemap_file.is_file():
         sitemap_from_gh = [f for f in website_files if f.name == "sitemap.xml"]
         root_files.extend(sitemap_from_gh)
@@ -50,6 +51,55 @@ async def sync_blog_to_vps() -> int:
         pushed += _sftp_push_to_root(root_files)
 
     return pushed
+
+
+def _inject_blog_links(website_files: list[Path], blog_dir: Path) -> None:
+    """Replace static blog link placeholders in blog.html with real post titles."""
+    import json
+    from html import escape
+
+    blog_html = next((f for f in website_files if f.name == "blog.html"), None)
+    if not blog_html:
+        return
+
+    posts_json = blog_dir / "posts.json"
+    if not posts_json.is_file():
+        return
+
+    try:
+        posts = json.loads(posts_json.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("Could not parse posts.json for link injection")
+        return
+
+    if not posts:
+        return
+
+    links = []
+    for p in posts:
+        pid = p.get("id", "")
+        title = escape(p.get("title") or f"Пост #{pid}")
+        links.append(f'                        <li><a href="blog/post-{pid}.html">{title}</a></li>')
+
+    links_html = (
+        '                <div id="blog-static-links" class="blog-static-links">\n'
+        '                    <h2>Усі статті блогу</h2>\n'
+        '                    <ul>\n'
+        + "\n".join(links) + "\n"
+        '                    </ul>\n'
+        '                </div>'
+    )
+
+    content = blog_html.read_text(encoding="utf-8")
+    start_marker = "<!-- BLOG_STATIC_LINKS_START -->"
+    end_marker = "<!-- BLOG_STATIC_LINKS_END -->"
+
+    if start_marker in content and end_marker in content:
+        before = content[:content.index(start_marker) + len(start_marker)]
+        after = content[content.index(end_marker):]
+        content = before + "\n" + links_html + "\n                " + after
+        blog_html.write_text(content, encoding="utf-8")
+        logger.info("Injected %d static blog links into blog.html", len(posts))
 
 
 def _fetch_website_files() -> list[Path]:
