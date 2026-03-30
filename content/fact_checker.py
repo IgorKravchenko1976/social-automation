@@ -60,6 +60,16 @@ FACT_CHECK_SYSTEM_PROMPT = """\
    Якщо пост рекомендує БУДЬ-ЯКУ небезпечну територію — verdict = "FAIL" ОБОВ'ЯЗКОВО.
 7. БЕЗПЕКА ТУРИСТІВ: Пост НЕ ПОВИНЕН рекомендувати місця де існує реальна загроза
    життю туристів (тероризм, збройні конфлікти, викрадення, природні катастрофи).
+8. ІНФОРМАЦІЙНА ЦІННІСТЬ (КРИТИЧНО!):
+   Пост ПОВИНЕН містити КОНКРЕТНУ, КОРИСНУ інформацію для мандрівника.
+   ВІДХИЛЯЙ пости які:
+   - Не називають КОНКРЕТНИХ місць (місто, країну) — пишуть "ці міста" або "ці місця" без назв
+   - Містять лише загальні фрази типу "це створено для вас" без деталей
+   - Не дають жодної практичної інформації (ні цін, ні транспорту, ні конкретних деталей)
+   - Описують тему абстрактно без ЖОДНОГО конкретного прикладу
+   Мінімум: пост ПОВИНЕН назвати хоча б ОДНЕ конкретне місце (місто + країна).
+   Якщо пост порожній за змістом (лише емоції без фактів) — verdict = "FAIL" з
+   suggestion "Додай конкретні деталі: назви міст, ціни, транспорт, практичні поради".
 
 === ВІДОМІ СПОРТИВНІ КАЛЕНДАРІ (обов'язково перевіряй!) ===
 Формула 1:
@@ -104,15 +114,63 @@ FACT_CHECK_SYSTEM_PROMPT = """\
 }}
 
 === ПРАВИЛА ВЕРДИКТУ ===
-- Якщо пост НЕ містить конкретних дат, подій з датами, або числових фактів — verdict = "PASS"
-- Загальні описи місць (без прив'язки до конкретних подій) — verdict = "PASS"
+- Якщо пост містить конкретне місце (місто, країна) і корисну інформацію — verdict = "PASS"
+- Загальні описи місць (з конкретною назвою міста/країни) — verdict = "PASS"
 - Якщо БУДЬ-ЯКЕ твердження має статус "wrong" — verdict ОБОВ'ЯЗКОВО = "FAIL"
 - Якщо є "suspicious" твердження (не можеш перевірити, але виглядає сумнівно) — verdict = "FAIL"
-- Будь СУВОРИМ: краще відхилити нормальний пост, ніж опублікувати з неправильними фактами
+- Якщо пост НЕ називає жодного конкретного місця (міста/країни) — verdict = "FAIL"
+- Якщо пост — це лише абстрактний заклик без конкретної інформації — verdict = "FAIL"
+- Будь СУВОРИМ: краще відхилити нормальний пост, ніж опублікувати з неправильними фактами або без інформації
 - Загальновідомі факти (столиця країни, відома пам'ятка, історична дата) — "ok"
 """
 
 MAX_FACT_CHECK_RETRIES = 2
+
+_VAGUE_PHRASES = [
+    "ці міста", "ці місця", "ці напрямки", "ці локації", "ці країни",
+    "these towns", "these cities", "these places", "these destinations",
+    "створені для вас", "мають бути у вашому списку",
+    "не пропустіть шанс", "варто відвідати",
+]
+
+
+def _check_information_density(text: str, content_type: str) -> FactCheckResult | None:
+    """Quick programmatic check that the post contains substantive info.
+
+    Returns a failing FactCheckResult if the post is too vague, or None if OK.
+    """
+    if content_type == "feature":
+        return None
+
+    text_lower = text.lower()
+
+    vague_count = sum(1 for phrase in _VAGUE_PHRASES if phrase in text_lower)
+
+    has_source_line = "джерело:" in text_lower or "📰" in text_lower
+    text_for_check = text_lower
+    if has_source_line:
+        for line in text.split("\n"):
+            if "джерело" in line.lower() or "📰" in line.lower():
+                text_for_check = text_lower.replace(line.lower(), "")
+                break
+
+    words = text_for_check.split()
+    capitalized = [w for w in words if w and w[0].isupper() and len(w) > 2
+                   and not w.startswith("http") and w not in ("I'M", "IN", "Джерело:", "Не")]
+
+    if vague_count >= 2 and len(capitalized) < 3:
+        return FactCheckResult(
+            passed=False,
+            claims=[{
+                "claim": "Пост не містить конкретної інформації",
+                "status": "wrong",
+                "reason": "Порожній пост без конкретних місць, деталей, цін чи практичних порад",
+            }],
+            summary="Пост порожній — немає конкретної інформації для мандрівника",
+            suggestion="Додай конкретні деталі: назви міст та країн, ціни, як дістатися, де зупинитися, що спробувати",
+        )
+
+    return None
 
 
 async def fact_check_post(post_text: str, content_type: str = "") -> FactCheckResult:
@@ -131,6 +189,11 @@ async def fact_check_post(post_text: str, content_type: str = "") -> FactCheckRe
             summary=f"Пост містить заборонену територію: {blocked}",
             suggestion="Повністю переписати пост без згадки окупованих територій, Росії або зон бойових дій",
         )
+
+    density_fail = _check_information_density(post_text, content_type)
+    if density_fail:
+        logger.warning("QUALITY BLOCK: post lacks information density — %s", density_fail.summary)
+        return density_fail
 
     client = _get_client()
     today_str = get_now_local().strftime("%d %B %Y (%A)")
