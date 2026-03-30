@@ -53,15 +53,35 @@ class TelegramPlatform(BasePlatform):
 
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
         try:
-            if image_path:
+            if image_path and len(text) <= 1024:
                 client = await ensure_client()
                 with open(image_path, "rb") as photo:
                     resp = await client.post(
                         api_url("sendPhoto"),
-                        data={"chat_id": settings.telegram_channel_id, "caption": text[:1024]},
+                        data={"chat_id": settings.telegram_channel_id, "caption": text},
                         files={"photo": photo},
                     )
                 data = resp.json()
+            elif image_path:
+                client = await ensure_client()
+                with open(image_path, "rb") as photo:
+                    resp = await client.post(
+                        api_url("sendPhoto"),
+                        data={"chat_id": settings.telegram_channel_id},
+                        files={"photo": photo},
+                    )
+                photo_data = resp.json()
+                if photo_data.get("ok"):
+                    photo_msg_id = photo_data["result"]["message_id"]
+                    data = await tg_request(
+                        "sendMessage",
+                        chat_id=settings.telegram_channel_id,
+                        text=text,
+                        reply_to_message_id=photo_msg_id,
+                        disable_web_page_preview=False,
+                    )
+                else:
+                    data = photo_data
             else:
                 data = await tg_request(
                     "sendMessage",
@@ -81,13 +101,33 @@ class TelegramPlatform(BasePlatform):
     async def publish_video(self, text: str, video_path: str) -> PublishResult:
         try:
             client = await ensure_client()
-            with open(video_path, "rb") as video:
-                resp = await client.post(
-                    api_url("sendVideo"),
-                    data={"chat_id": settings.telegram_channel_id, "caption": text[:1024]},
-                    files={"video": video},
-                )
-            data = resp.json()
+            if len(text) <= 1024:
+                with open(video_path, "rb") as video:
+                    resp = await client.post(
+                        api_url("sendVideo"),
+                        data={"chat_id": settings.telegram_channel_id, "caption": text},
+                        files={"video": video},
+                    )
+                data = resp.json()
+            else:
+                with open(video_path, "rb") as video:
+                    resp = await client.post(
+                        api_url("sendVideo"),
+                        data={"chat_id": settings.telegram_channel_id},
+                        files={"video": video},
+                    )
+                video_data = resp.json()
+                if video_data.get("ok"):
+                    video_msg_id = video_data["result"]["message_id"]
+                    data = await tg_request(
+                        "sendMessage",
+                        chat_id=settings.telegram_channel_id,
+                        text=text,
+                        reply_to_message_id=video_msg_id,
+                        disable_web_page_preview=False,
+                    )
+                else:
+                    data = video_data
             if data.get("ok"):
                 msg_id = str(data["result"]["message_id"])
                 await self._save_channel_post(data["result"], text)
