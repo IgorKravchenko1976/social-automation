@@ -344,7 +344,7 @@ def generate_post_html(
             transition: color 0.3s;
         }}
         .post-header a:hover {{ color: #fff; }}
-        .post-header img {{ height: 32px; border-radius: 6px; }}
+        .post-header img {{ height: 44px; width: 44px; border-radius: 50%; object-fit: cover; }}
         .post-hero {{
             width: 100px; height: auto; object-fit: cover;
             border-radius: 8px; margin: 2rem 0 1.5rem;
@@ -400,7 +400,7 @@ def generate_post_html(
 <body>
     <header class="post-header">
         <div class="container">
-            <a href="../index.html"><img src="../logo-imin.png" alt="I'M IN" width="120" height="44"></a>
+            <a href="../index.html"><img src="../logo-imin.png" alt="I'M IN" width="44" height="44"></a>
             <nav aria-label="Навігація">
                 <a href="../blog.html" id="back-link">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
