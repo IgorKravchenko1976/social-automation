@@ -157,6 +157,25 @@ async def _enrich_post_with_geo(post: Post) -> None:
         logger.warning("Geo extraction failed for post_id=%s", post.id)
 
 
+async def _enrich_post_with_geo_from_text(post: Post, generated_text: str) -> None:
+    """Fallback geo extraction from the full generated text.
+
+    Called when the initial extraction from the short topic/title failed to
+    find coordinates. The full AI-generated text usually mentions specific
+    cities and locations that can be geocoded.
+    """
+    try:
+        geo = await extract_location_coordinates(generated_text[:500])
+        if geo:
+            post.latitude = geo["lat"]
+            post.longitude = geo["lon"]
+            post.place_name = (geo.get("name") or "")[:500]
+            logger.info("Geo fallback OK for post_id=%s: %s (%.4f, %.4f)",
+                        post.id, post.place_name, geo["lat"], geo["lon"])
+    except Exception:
+        logger.warning("Geo fallback failed for post_id=%s", post.id)
+
+
 def _is_banned(title: str, summary: str) -> bool:
     """Check if an RSS entry contains banned political/military keywords or blocked territories."""
     text = (title + " " + summary).lower()
@@ -716,6 +735,9 @@ async def _publish_single(
             pub.content_adapted = await _generate_and_verify_text(
                 post, platform, content_type,
             )
+
+            if not post.latitude or not post.longitude:
+                await _enrich_post_with_geo_from_text(post, pub.content_adapted)
 
             limits = PLATFORM_LIMITS.get(platform, {})
             if limits.get("supports_links") and post.latitude and post.longitude:
