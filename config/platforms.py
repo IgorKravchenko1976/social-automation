@@ -31,22 +31,27 @@ def configured_platforms() -> list[Platform]:
     return configured
 
 
+_platform_registry: dict | None = None
+
+
 def get_platform_instance(platform: Platform):
     """Create a platform adapter instance."""
-    from platforms.telegram import TelegramPlatform
-    from platforms.facebook import FacebookPlatform
-    from platforms.twitter import TwitterPlatform
-    from platforms.instagram import InstagramPlatform
-    from platforms.tiktok import TikTokPlatform
+    global _platform_registry
+    if _platform_registry is None:
+        from platforms.telegram import TelegramPlatform
+        from platforms.facebook import FacebookPlatform
+        from platforms.twitter import TwitterPlatform
+        from platforms.instagram import InstagramPlatform
+        from platforms.tiktok import TikTokPlatform
 
-    _registry = {
-        Platform.TELEGRAM: TelegramPlatform,
-        Platform.FACEBOOK: FacebookPlatform,
-        Platform.TWITTER: TwitterPlatform,
-        Platform.INSTAGRAM: InstagramPlatform,
-        Platform.TIKTOK: TikTokPlatform,
-    }
-    return _registry[platform]()
+        _platform_registry = {
+            Platform.TELEGRAM: TelegramPlatform,
+            Platform.FACEBOOK: FacebookPlatform,
+            Platform.TWITTER: TwitterPlatform,
+            Platform.INSTAGRAM: InstagramPlatform,
+            Platform.TIKTOK: TikTokPlatform,
+        }
+    return _platform_registry[platform]()
 
 
 FACEBOOK_GRAPH_API = "https://graph.facebook.com/v21.0"

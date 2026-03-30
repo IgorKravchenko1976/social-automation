@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from sqlalchemy import select, or_
+from sqlalchemy import select
 
 from config.platforms import Platform, configured_platforms, get_platform_instance, PLATFORM_LABELS
 from config.settings import settings, get_now_local

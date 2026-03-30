@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from openai import AsyncOpenAI
 
 from config.settings import settings
+from content.ai_client import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,7 @@ async def generate_image_dalle(prompt: str) -> Optional[str]:
         return None
 
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-        response = await client.images.generate(
+        response = await get_client().images.generate(
             model="dall-e-3",
             prompt=prompt,
             size="1024x1024",

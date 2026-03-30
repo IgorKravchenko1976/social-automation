@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -84,13 +82,12 @@ class Settings(BaseSettings):
     media_cache_dir: str = ""
 
     def model_post_init(self, __context) -> None:
-        import pathlib
-        pathlib.Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.data_dir).mkdir(parents=True, exist_ok=True)
         if not self.database_url:
             self.database_url = f"sqlite+aiosqlite:///{self.data_dir}/social.db"
         if not self.media_cache_dir:
             self.media_cache_dir = f"{self.data_dir}/media_cache"
-        pathlib.Path(self.media_cache_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.media_cache_dir).mkdir(parents=True, exist_ok=True)
 
     model_config = {
         "env_file": str(BASE_DIR / ".env"),

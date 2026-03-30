@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
 from contextlib import asynccontextmanager
@@ -100,9 +101,19 @@ async def lifespan(app: FastAPI):
     from scheduler.blog_sync import sync_blog_to_vps
     await _safe(sync_blog_to_vps(), "blog_generate")
 
+    from scheduler.server_monitor import start_monitor_loop, stop_monitor
+    monitor_task = asyncio.create_task(start_monitor_loop())
+
     logger.info("Social Media Automation is running! Schedule: %s (%s)",
                 settings.post_schedule, settings.timezone)
     yield
+
+    stop_monitor()
+    monitor_task.cancel()
+    try:
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
 
     await stop_telegram_bot()
     scheduler.shutdown()

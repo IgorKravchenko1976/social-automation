@@ -13,18 +13,22 @@ import matplotlib.pyplot as plt
 from config.settings import settings, get_today_start_utc, get_now_local, parse_slot_time
 from config.platforms import PLATFORM_LABELS, PLATFORM_COLORS, PLATFORM_ICONS, configured_platforms
 from db.models import DailyStats, PostStatus
+from scheduler.post_creator import SLOT_CONTENT_TYPES
 
 logger = logging.getLogger(__name__)
 
-POST_TYPE_LABELS = {
-    0: "Туристична новина",
-    1: "Активний спорт",
-    2: "Туристична новина",
-    3: "Функціонал додатку",
-    4: "Красиве місце",
+_CONTENT_TYPE_LABELS = {
+    "tourism_news": "Туристична новина",
+    "active_travel": "Активний відпочинок",
+    "leisure_travel": "Спокійний відпочинок",
+    "feature": "Функціонал додатку",
 }
 
-_CELL = 'style="padding:{pad};border-bottom:1px solid #262640;{extra}"'
+POST_TYPE_LABELS = {
+    i: _CONTENT_TYPE_LABELS.get(ct, ct)
+    for i, ct in enumerate(SLOT_CONTENT_TYPES)
+}
+
 _BG = "#1a1a2e"
 
 
@@ -379,7 +383,6 @@ def build_website_section(blog_status: dict) -> str:
     vps_synced = blog_status.get("vps_synced")
 
     if ok:
-        vps_icon = "✅" if vps_synced else ("⚠️" if vps_synced is False else "")
         vps_text = " &bull; VPS: синхронізовано" if vps_synced else (" &bull; VPS: не синхронізовано" if vps_synced is False else "")
         status_html = f'<span style="color:#6ee7b7;font-weight:700;">✅ Онлайн</span>'
         detail = (

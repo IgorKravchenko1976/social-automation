@@ -10,23 +10,12 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
-
-from openai import AsyncOpenAI
 
 from config.settings import settings, get_now_local
+from content.ai_client import get_client
 from content.tourism_topics import contains_blocked_territory
 
 logger = logging.getLogger(__name__)
-
-_client: Optional[AsyncOpenAI] = None
-
-
-def _get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(api_key=settings.openai_api_key)
-    return _client
 
 
 @dataclass
@@ -195,7 +184,7 @@ async def fact_check_post(post_text: str, content_type: str = "") -> FactCheckRe
         logger.warning("QUALITY BLOCK: post lacks information density — %s", density_fail.summary)
         return density_fail
 
-    client = _get_client()
+    client = get_client()
     today_str = get_now_local().strftime("%d %B %Y (%A)")
     system = FACT_CHECK_SYSTEM_PROMPT.format(today=today_str)
 

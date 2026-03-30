@@ -7,7 +7,7 @@ import logging
 
 from sqlalchemy import select
 
-from config.settings import settings, get_now_local, ensure_utc
+from config.settings import settings
 from config.platforms import Platform
 from config.emoji_classification import classify_emoji
 from db.database import async_session
@@ -31,7 +31,6 @@ async def _track_channel_post(post: dict) -> None:
 
     try:
         async with async_session() as session:
-            from sqlalchemy import select
             existing = await session.execute(
                 select(MsgModel).where(
                     MsgModel.platform == "telegram",

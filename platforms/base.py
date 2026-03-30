@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import abc
-import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from config.platforms import Platform
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

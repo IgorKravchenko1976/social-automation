@@ -17,7 +17,6 @@ class TwitterPlatform(BasePlatform):
 
     def __init__(self):
         self._client: Optional[tweepy.Client] = None
-        self._auth: Optional[tweepy.OAuth1UserHandler] = None
         self._api_v1: Optional[tweepy.API] = None
 
     @property

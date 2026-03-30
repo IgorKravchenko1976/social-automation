@@ -97,6 +97,29 @@ async def trigger_health_check():
     return {"status": "ok", "recent_log": read_log_tail(40)}
 
 
+@router.get("/monitor/status")
+async def monitor_status():
+    """Current server monitoring state: all checks + failure history."""
+    from scheduler.server_monitor import get_monitor_status
+    return get_monitor_status()
+
+
+@router.post("/trigger/monitor-check")
+async def trigger_monitor_check():
+    """Run all monitoring checks once and return results."""
+    from scheduler.server_monitor import run_all_checks, get_monitor_status
+    results = await run_all_checks()
+    return {
+        "results": [
+            {"check": r.check_id, "status": r.status.value,
+             "response_ms": r.response_ms, "error": r.error,
+             "status_code": r.status_code}
+            for r in results
+        ],
+        "monitor": get_monitor_status(),
+    }
+
+
 # ── Logs ──────────────────────────────────────────────────────────────────────
 
 @router.get("/logs")
