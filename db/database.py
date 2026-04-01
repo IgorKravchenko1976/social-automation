@@ -40,6 +40,7 @@ async def _run_migrations(conn) -> None:
         ("posts", "place_name", "VARCHAR(500)"),
         ("posts", "translations", "TEXT"),
         ("posts", "source_published_at", "DATETIME"),
+        ("posts", "pipeline_log", "TEXT"),
         ("messages", "thread_id", "VARCHAR(500)"),
         ("messages", "view_count", "INTEGER DEFAULT 0"),
     ]

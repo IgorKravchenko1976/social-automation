@@ -174,6 +174,7 @@ async def create_daily_posts() -> None:
                 source_url=entry["link"],
                 source_published_at=pub_date,
             )
+            post.log_pipeline("topic", "ok", f"RSS: {source_name} — {entry['title'][:120]}")
             session.add(post)
             await session.flush()
             for platform in ALL_PLATFORMS:
@@ -186,6 +187,7 @@ async def create_daily_posts() -> None:
                 session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles,
             )
             post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
+            post.log_pipeline("topic", "ok", f"AI leisure (RSS fill-in): {leisure_topic[:120]}")
             session.add(post)
             await session.flush()
             for platform in ALL_PLATFORMS:
@@ -198,6 +200,7 @@ async def create_daily_posts() -> None:
             session, ACTIVE_DIRECTIONS, "active_travel", recent_titles,
         )
         post = Post(title=active_topic[:200], content_raw=active_topic, source="ai")
+        post.log_pipeline("topic", "ok", f"AI active_travel: {active_topic[:120]}")
         session.add(post)
         await session.flush()
         for platform in ALL_PLATFORMS:
@@ -210,6 +213,7 @@ async def create_daily_posts() -> None:
             session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles,
         )
         post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
+        post.log_pipeline("topic", "ok", f"AI leisure_travel: {leisure_topic[:120]}")
         session.add(post)
         await session.flush()
         for platform in ALL_PLATFORMS:
@@ -223,6 +227,7 @@ async def create_daily_posts() -> None:
             session, FEATURE_DIRECTIONS, recent_titles, travel_context,
         )
         post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
+        post.log_pipeline("topic", "ok", f"AI feature: {feature_topic[:120]}")
         session.add(post)
         await session.flush()
         for platform in ALL_PLATFORMS:
@@ -230,15 +235,19 @@ async def create_daily_posts() -> None:
         created_posts.append((post, "feature"))
         recent_titles.append(feature_topic)
 
-        for post_obj, _ in created_posts:
+        for post_obj, ctype in created_posts:
             try:
                 tr = await translate_post(
                     post_obj.title or "", post_obj.content_raw or "",
                 )
                 if tr:
                     post_obj.translations = _json.dumps(tr, ensure_ascii=False)
-            except Exception:
+                    post_obj.log_pipeline("translate", "ok", f"{len(tr)} languages")
+                else:
+                    post_obj.log_pipeline("translate", "warn", "No translations returned")
+            except Exception as e:
                 logger.warning("Translation failed for post_id=%s", post_obj.id)
+                post_obj.log_pipeline("translate", "fail", str(e)[:200])
 
         await session.commit()
         logger.info(
@@ -283,6 +292,7 @@ async def create_single_post(content_type: str) -> Optional[Post]:
                     source_url=entry["link"],
                     source_published_at=pub_date,
                 )
+                post.log_pipeline("topic", "ok", f"RSS: {source_name} — {entry['title'][:120]}")
             else:
                 logger.info("=== FRESH === No RSS news, falling back to leisure_travel")
                 content_type = "leisure_travel"
@@ -290,10 +300,12 @@ async def create_single_post(content_type: str) -> Optional[Post]:
         if content_type == "active_travel":
             topic = await _pick_unique_topic(session, ACTIVE_DIRECTIONS, "active_travel", recent_titles)
             post = Post(title=topic[:200], content_raw=topic, source="ai")
+            post.log_pipeline("topic", "ok", f"AI active_travel: {topic[:120]}")
 
         elif content_type == "leisure_travel":
             topic = await _pick_unique_topic(session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles)
             post = Post(title=topic[:200], content_raw=topic, source="ai")
+            post.log_pipeline("topic", "ok", f"AI leisure_travel: {topic[:120]}")
 
         elif content_type == "feature":
             today_start_utc = get_today_start_utc()
@@ -304,6 +316,7 @@ async def create_single_post(content_type: str) -> Optional[Post]:
             travel_context = random.choice(recent_today) if recent_today else ""
             topic = await _pick_feature_topic(session, FEATURE_DIRECTIONS, recent_titles, travel_context)
             post = Post(title=topic[:200], content_raw=topic, source="ai")
+            post.log_pipeline("topic", "ok", f"AI feature: {topic[:120]}")
 
         if not post:
             logger.warning("=== FRESH === Failed to create post type=%s", content_type)
@@ -319,8 +332,10 @@ async def create_single_post(content_type: str) -> Optional[Post]:
             tr = await translate_post(post.title or "", post.content_raw or "")
             if tr:
                 post.translations = _json.dumps(tr, ensure_ascii=False)
-        except Exception:
+                post.log_pipeline("translate", "ok", f"{len(tr)} languages")
+        except Exception as e:
             logger.warning("Translation failed for post_id=%s", post.id)
+            post.log_pipeline("translate", "fail", str(e)[:200])
 
         await session.commit()
         logger.info("=== FRESH === Created post_id=%d type=%s title='%s'",

@@ -81,12 +81,15 @@ async def _extract_geo_for_post(post: Post, text: str) -> None:
             post.place_name = (geo.get("name") or "")[:500]
             logger.info("GEO: post_id=%s → %s (%.4f, %.4f)",
                         post.id, post.place_name, geo["lat"], geo["lon"])
+            post.log_pipeline("geo", "ok", f"{post.place_name} ({geo['lat']:.4f}, {geo['lon']:.4f})")
         else:
             post.latitude = None
             post.longitude = None
             post.place_name = None
-    except Exception:
+            post.log_pipeline("geo", "warn", f"No location found in text: '{text[:80]}...'")
+    except Exception as e:
         logger.warning("GEO: extraction failed for post_id=%s", post.id)
+        post.log_pipeline("geo", "fail", str(e)[:200])
 
 
 async def _generate_and_verify_text(
@@ -140,6 +143,8 @@ async def _generate_and_verify_text(
                     content_type=content_type,
                 )
         except BlockedTerritoryError as e:
+            post.log_pipeline("text_gen", "fail",
+                              f"TERRITORY BLOCK attempt {attempt+1}: '{e.keyword}'")
             logger.warning(
                 "TERRITORY BLOCK: attempt %d/%d for %s post_id=%s: '%s'",
                 attempt + 1, MAX_FACT_CHECK_RETRIES + 1,
@@ -153,10 +158,16 @@ async def _generate_and_verify_text(
             )
             continue
 
+        post.log_pipeline("text_gen", "ok",
+                          f"attempt {attempt+1}/{MAX_FACT_CHECK_RETRIES+1} "
+                          f"for {platform.value}, len={len(text)}")
+
         await _extract_geo_for_post(post, text)
 
         check = await fact_check_post(text, content_type)
         if check.passed:
+            post.log_pipeline("fact_check", "ok",
+                              f"PASS attempt {attempt+1}/{MAX_FACT_CHECK_RETRIES+1}: {check.summary[:150]}")
             if attempt > 0:
                 logger.info(
                     "FACT-CHECK: Passed on attempt %d/%d for %s post_id=%s",
@@ -166,12 +177,17 @@ async def _generate_and_verify_text(
             return text
 
         last_suggestion = check.suggestion or check.summary
+        post.log_pipeline("fact_check", "fail",
+                          f"FAIL attempt {attempt+1}/{MAX_FACT_CHECK_RETRIES+1}: "
+                          f"{check.summary[:100]} | hint: {check.suggestion[:100]}")
         logger.warning(
             "FACT-CHECK: Attempt %d/%d FAIL for %s post_id=%s: %s",
             attempt + 1, MAX_FACT_CHECK_RETRIES + 1,
             platform.value, post.id, check.summary[:150],
         )
 
+    post.log_pipeline("fact_check", "fail",
+                      f"All {MAX_FACT_CHECK_RETRIES+1} attempts exhausted — topic rejected")
     logger.error(
         "FACT-CHECK: All %d attempts exhausted for post_id=%s — topic rejected",
         MAX_FACT_CHECK_RETRIES + 1, post.id,
@@ -201,6 +217,8 @@ async def _publish_single(
             if text is None:
                 pub.status = PostStatus.FAILED
                 pub.error_message = "Fact-check rejected all attempts"
+                post.log_pipeline("publish", "fail",
+                                  f"{platform.value}: skipped — fact-check rejected text")
                 return
             pub.content_adapted = text
 
@@ -240,16 +258,22 @@ async def _publish_single(
             pub.status = PostStatus.PUBLISHED
             pub.platform_post_id = result.platform_post_id
             pub.published_at = datetime.now(timezone.utc)
+            post.log_pipeline("publish", "ok",
+                              f"{platform.value}: published, id={result.platform_post_id}")
             logger.info("=== PUBLISH === OK %s post_id=%d platform_post_id=%s",
                         platform.value, post.id, result.platform_post_id)
         else:
             pub.retry_count += 1
             if pub.retry_count >= MAX_RETRIES:
                 pub.status = PostStatus.FAILED
+                post.log_pipeline("publish", "fail",
+                                  f"{platform.value}: FINAL FAIL after {pub.retry_count} retries: {result.error[:150]}")
                 logger.error("=== PUBLISH === FINAL FAIL %s post_id=%d after %d retries: %s",
                              platform.value, post.id, pub.retry_count, result.error)
             else:
                 pub.status = PostStatus.QUEUED
+                post.log_pipeline("publish", "warn",
+                                  f"{platform.value}: retry {pub.retry_count}/{MAX_RETRIES}: {result.error[:150]}")
                 logger.warning("=== PUBLISH === RETRY %s post_id=%d attempt=%d/%d: %s",
                                platform.value, post.id, pub.retry_count, MAX_RETRIES, result.error)
             pub.error_message = result.error

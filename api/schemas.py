@@ -1,10 +1,11 @@
 """Pydantic request/response schemas for the API."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class PostOut(BaseModel):
@@ -13,8 +14,22 @@ class PostOut(BaseModel):
     content_raw: str
     source: str
     image_path: Optional[str]
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    place_name: Optional[str] = None
+    pipeline_log: Optional[list[dict]] = None
     scheduled_at: Optional[datetime]
     created_at: Optional[datetime]
+
+    @field_validator("pipeline_log", mode="before")
+    @classmethod
+    def _parse_pipeline_log(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return v
 
     model_config = {"from_attributes": True}
 

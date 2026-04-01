@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json as _json
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
@@ -41,10 +43,27 @@ class Post(Base):
     place_name = Column(String(500), nullable=True)
     source_published_at = Column(DateTime, nullable=True)  # date the original source published the article
     translations = Column(Text, nullable=True)  # JSON: {"en": {"title":"...","content":"..."}, ...}
+    pipeline_log = Column(Text, nullable=True)  # JSON array of pipeline stage entries
     scheduled_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     publications = relationship("Publication", back_populates="post", cascade="all, delete-orphan")
+
+    def log_pipeline(self, stage: str, status: str, detail: str = "") -> None:
+        """Append an entry to the post's pipeline log.
+
+        stage:  e.g. "topic", "text_gen", "geo", "fact_check", "publish"
+        status: "ok", "fail", "skip", "warn"
+        detail: human-readable explanation
+        """
+        entries: list = _json.loads(self.pipeline_log) if self.pipeline_log else []
+        entries.append({
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "stage": stage,
+            "status": status,
+            "detail": detail[:500],
+        })
+        self.pipeline_log = _json.dumps(entries, ensure_ascii=False)
 
 
 class Publication(Base):

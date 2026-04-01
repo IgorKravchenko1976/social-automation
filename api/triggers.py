@@ -111,13 +111,21 @@ async def trigger_monitor_check():
     results = await run_all_checks()
     return {
         "results": [
-            {"check": r.check_id, "status": r.status.value,
+            {"server": r.server_id, "check": r.check_id, "status": r.status.value,
              "response_ms": r.response_ms, "error": r.error,
              "status_code": r.status_code}
             for r in results
         ],
         "monitor": get_monitor_status(),
     }
+
+
+@router.post("/trigger/monitor-test-email")
+async def trigger_monitor_test_email():
+    """Run all checks and send a test monitoring report email."""
+    from scheduler.server_monitor import send_test_email
+    result = await send_test_email()
+    return {"result": result}
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
