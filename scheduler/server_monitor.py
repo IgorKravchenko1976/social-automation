@@ -76,6 +76,10 @@ SERVERS: dict[str, dict] = {
                 "name": "API liveness (ping)",
                 "url": "https://api-v2.im-in.net/v1/api/ping",
             },
+            "api_docs": {
+                "name": "API Docs (Swagger)",
+                "url": "https://api-v2.im-in.net/api/v1/docs",
+            },
         },
     },
 }
