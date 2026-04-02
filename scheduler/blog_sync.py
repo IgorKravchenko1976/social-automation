@@ -112,6 +112,7 @@ def _fetch_website_files() -> list[Path]:
     files_to_sync = [
         "blog.html", "index.html", "robots.txt", "sitemap.xml",
         "terms.html", "privacy.html", "404.html",
+        "terms-v1.html", "privacy-v1.html",
         "translations.js", "styles.css", "manifest.json",
         "script.js", "favicon.svg",
     ]
