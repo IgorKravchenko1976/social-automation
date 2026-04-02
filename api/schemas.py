@@ -107,3 +107,78 @@ class StatsOut(BaseModel):
     total_messages_in: int
     total_messages_out: int
     messages_unanswered: int
+
+
+# -----------  Geo Research Agent  -----------
+
+class GeoResearchRequest(BaseModel):
+    latitude: float
+    longitude: float
+    name: Optional[str] = None
+    language: str = "uk"
+
+
+class GeoResearchSubmitResponse(BaseModel):
+    request_id: str
+    status: str
+    received_at: datetime
+    message: str
+
+
+class HistoryEntry(BaseModel):
+    period: str
+    description: str
+
+
+class PlaceEntry(BaseModel):
+    name: str
+    type: str
+    description: str
+    url: Optional[str] = None
+
+
+class NewsEntry(BaseModel):
+    title: str
+    description: str
+    source: Optional[str] = None
+
+
+class GeoResearchResult(BaseModel):
+    summary: str
+    history: list[HistoryEntry] = []
+    places: list[PlaceEntry] = []
+    news: list[NewsEntry] = []
+
+
+class GeoResearchQueueStatus(BaseModel):
+    can_accept: bool
+    queue_size: int
+    processing: int
+    processed_24h: int
+    daily_limit: int
+    completed_pending_pickup: int
+
+
+class GeoResearchTaskOut(BaseModel):
+    request_id: str
+    status: str
+    latitude: float
+    longitude: float
+    name: Optional[str] = None
+    language: str
+    received_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    result: Optional[GeoResearchResult] = None
+    error_message: Optional[str] = None
+
+    @field_validator("result", mode="before")
+    @classmethod
+    def _parse_result(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return v
+
+    model_config = {"from_attributes": True}

@@ -23,6 +23,14 @@ class PostStatus(str, PyEnum):
     FAILED = "failed"
 
 
+class GeoResearchStatus(str, PyEnum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    EMPTY = "empty"
+    FAILED = "failed"
+
+
 class MessageDirection(str, PyEnum):
     INCOMING = "incoming"
     OUTGOING = "outgoing"
@@ -158,3 +166,20 @@ class DailyStats(Base):
     likes = Column(Integer, default=0)              # positive + neutral reactions
     dislikes = Column(Integer, default=0)           # negative reactions
     collected_at = Column(DateTime, server_default=func.now())
+
+
+class GeoResearchTask(Base):
+    __tablename__ = "geo_research_tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    request_id = Column(String(36), unique=True, nullable=False, index=True)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    name = Column(String(500), nullable=True)
+    language = Column(String(10), default="uk")
+    status = Column(Enum(GeoResearchStatus), default=GeoResearchStatus.QUEUED)
+    result = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    received_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())

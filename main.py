@@ -16,6 +16,7 @@ from config.settings import settings
 from config.app_logger import setup_logging
 from db.database import init_db
 from api.routes import router as admin_router, public_router
+from api.routes_geo import geo_router
 from api.triggers import router as triggers_router
 
 log_file = setup_logging(data_dir=settings.data_dir, level=logging.INFO)
@@ -60,6 +61,10 @@ def _setup_scheduler() -> None:
     from scheduler.blog_sync import sync_blog_to_vps
     scheduler.add_job(sync_blog_to_vps, CronTrigger(hour=21, minute=0, timezone=tz),
                       id="blog_sync_daily", replace_existing=True)
+
+    from geo_agent.processor import process_geo_queue
+    scheduler.add_job(process_geo_queue, "interval", minutes=2,
+                      id="geo_research_queue", replace_existing=True)
 
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
@@ -142,6 +147,7 @@ app.add_middleware(
 app.include_router(public_router)
 app.include_router(admin_router)
 app.include_router(triggers_router)
+app.include_router(geo_router)
 
 _static_dir = pathlib.Path(__file__).parent / "static"
 _static_dir.mkdir(exist_ok=True)
