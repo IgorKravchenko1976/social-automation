@@ -82,6 +82,30 @@ SERVERS: dict[str, dict] = {
             },
         },
     },
+    "im-in-api-v21": {
+        "label": "I'M IN API v2.1 (Hetzner)",
+        "host": "api-v21.im-in.net",
+        "port": 443,
+        "checks": {
+            "tcp_connect": {
+                "name": "TCP з'єднання (ping)",
+                "type": "tcp",
+            },
+            "api_health": {
+                "name": "API + DB (health)",
+                "url": "https://api-v21.im-in.net/v1/api/health",
+                "expect_json": {"status": "ok"},
+            },
+            "api_ping": {
+                "name": "API liveness (ping)",
+                "url": "https://api-v21.im-in.net/v1/api/ping",
+            },
+            "api_docs": {
+                "name": "API Docs (Swagger)",
+                "url": "https://api-v21.im-in.net/api/v1/docs",
+            },
+        },
+    },
 }
 
 
