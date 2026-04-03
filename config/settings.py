@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     vps_ssh_key: str = ""
     vps_blog_path: str = "/var/www/im-in.net/html/blog"
 
+    # IM-IN API #2: публікація блогу без SFTP (пріоритет над VPS_SSH_* якщо ключ заданий).
+    marketing_publish_api_base: str = ""
+    marketing_publish_api_key: str = ""
+    # Шаблони кореня сайту (blog.html тощо). Порожньо = GitLab raw imin-backend web/marketing.
+    marketing_template_base_url: str = ""
+
     # Persistent data directory (mount Railway Volume here)
     data_dir: str = "/data"
 

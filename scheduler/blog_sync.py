@@ -1,13 +1,18 @@
-"""Synchronise generated blog pages to the VPS via SFTP.
+"""Синхронізація згенерованих HTML-сторінок блогу на продакшен-сайт.
 
-If VPS_SSH_HOST is not configured, pages are only generated locally
-on Railway (served at /static/blog/) and accessible via API fallback.
+Пріоритет доставки:
+1. API **imin-backend** (`MARKETING_PUBLISH_API_*`) — бекенд пише у каталог nginx.
+2. **SFTP** (`VPS_SSH_*`) — застарілий шлях, якщо API-ключ не заданий.
+3. Лише локально (`data/blog` на Railway), якщо немає ні API, ні SFTP.
 """
 from __future__ import annotations
 
+import base64
 import io
 import logging
 from pathlib import Path
+
+import httpx
 
 from config.settings import settings
 
@@ -15,9 +20,11 @@ logger = logging.getLogger(__name__)
 
 BLOG_DIR = "blog"
 
+_DEFAULT_TEMPLATE_BASE = "https://gitlab.com/igork2011/imin-backend/-/raw/main/web/marketing"
+
 
 async def sync_blog_to_vps() -> int:
-    """Generate all blog pages and push to VPS. Returns count of synced files."""
+    """Generate all blog pages and push via API, SFTP, or keep local only."""
     from content.blog_generator import generate_all_published, _blog_dir
 
     generated = await generate_all_published()
@@ -29,16 +36,20 @@ async def sync_blog_to_vps() -> int:
     all_files = list(set(generated + thumbs))
 
     sitemap_file = blog_dir / "sitemap.xml"
+    blog_paths = [f for f in all_files if f.name != "sitemap.xml"]
+    valid_names = {f.name for f in blog_paths}
 
-    has_creds = settings.vps_ssh_host and (settings.vps_ssh_password or settings.vps_ssh_key)
-    if not has_creds:
-        logger.info("VPS SSH not configured — blog pages saved locally only (%s)", blog_dir)
+    use_api = bool(settings.marketing_publish_api_key and settings.marketing_publish_api_base)
+    has_sftp = settings.vps_ssh_host and (settings.vps_ssh_password or settings.vps_ssh_key)
+
+    if use_api:
+        return await _sync_blog_via_imin_api(blog_dir, blog_paths, sitemap_file, valid_names)
+
+    if not has_sftp:
+        logger.info("No marketing API or VPS SSH — blog pages saved locally only (%s)", blog_dir)
         return len(all_files)
 
-    blog_files = [f for f in all_files if f.name != "sitemap.xml"]
-    pushed = _sftp_push(blog_files)
-
-    valid_names = {f.name for f in blog_files}
+    pushed = _sftp_push(blog_paths)
     _sftp_cleanup_orphans(valid_names)
 
     root_files: list[Path] = []
@@ -54,6 +65,82 @@ async def sync_blog_to_vps() -> int:
         pushed += _sftp_push_to_root(root_files)
 
     return pushed
+
+
+async def _list_blog_files_via_api() -> list[str]:
+    base = settings.marketing_publish_api_base.rstrip("/")
+    url = f"{base}/blog-files"
+    headers = {"X-Marketing-Publish-Key": settings.marketing_publish_api_key}
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        r = await client.get(url, headers=headers)
+        r.raise_for_status()
+        data = r.json()
+        return list(data.get("files") or [])
+
+
+async def _sync_blog_via_imin_api(
+    blog_dir: Path,
+    blog_paths: list[Path],
+    sitemap_file: Path,
+    valid_names: set[str],
+) -> int:
+    delete_blog: list[str] = []
+    try:
+        remote = await _list_blog_files_via_api()
+        for name in remote:
+            if name not in valid_names:
+                delete_blog.append(name)
+    except Exception:
+        logger.warning("[blog-sync API] remote blog-files list failed", exc_info=True)
+
+    website_files = _fetch_website_files()
+    _inject_blog_links(website_files, blog_dir)
+
+    root_paths: list[Path] = []
+    if sitemap_file.is_file():
+        root_paths.append(sitemap_file)
+    if not sitemap_file.is_file():
+        sitemap_from_tpl = [f for f in website_files if f.name == "sitemap.xml"]
+        root_paths.extend(sitemap_from_tpl)
+    root_paths.extend([f for f in website_files if f.name != "sitemap.xml"])
+
+    blog_payload = [
+        {"name": p.name, "data_b64": base64.b64encode(p.read_bytes()).decode("ascii")}
+        for p in blog_paths
+    ]
+    root_payload = [
+        {"name": p.name, "data_b64": base64.b64encode(p.read_bytes()).decode("ascii")}
+        for p in root_paths
+    ]
+
+    base = settings.marketing_publish_api_base.rstrip("/")
+    url = f"{base}/publish"
+    headers = {
+        "X-Marketing-Publish-Key": settings.marketing_publish_api_key,
+        "Content-Type": "application/json",
+    }
+    body = {
+        "blog_files": blog_payload,
+        "root_files": root_payload,
+        "delete_blog": delete_blog,
+    }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        r = await client.post(url, headers=headers, json=body)
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.error(
+                "[blog-sync API] publish failed: %s %s",
+                r.status_code,
+                (r.text or "")[:800],
+            )
+            raise
+        data = r.json()
+        written = int(data.get("written", 0))
+        removed = int(data.get("removed", 0))
+        logger.info("[blog-sync API] ok written=%s removed=%s", written, removed)
+        return written
 
 
 def _inject_blog_links(website_files: list[Path], blog_dir: Path) -> None:
@@ -98,17 +185,18 @@ def _inject_blog_links(website_files: list[Path], blog_dir: Path) -> None:
     end_marker = "<!-- BLOG_STATIC_LINKS_END -->"
 
     if start_marker in content and end_marker in content:
-        before = content[:content.index(start_marker) + len(start_marker)]
-        after = content[content.index(end_marker):]
+        before = content[: content.index(start_marker) + len(start_marker)]
+        after = content[content.index(end_marker) :]
         content = before + "\n" + links_html + "\n                " + after
         blog_html.write_text(content, encoding="utf-8")
         logger.info("Injected %d static blog links into blog.html", len(posts))
 
 
 def _fetch_website_files() -> list[Path]:
-    """Download latest website files from GitHub and return local paths."""
-    import tempfile, httpx
-    base = "https://raw.githubusercontent.com/IgorKravchenko1976/im-in-website/main"
+    """Download marketing root templates (blog.html, …) for sync."""
+    import tempfile
+
+    base = (settings.marketing_template_base_url or "").strip().rstrip("/") or _DEFAULT_TEMPLATE_BASE
     files_to_sync = [
         "blog.html", "index.html", "robots.txt", "sitemap.xml",
         "terms.html", "privacy.html", "404.html",
@@ -117,17 +205,17 @@ def _fetch_website_files() -> list[Path]:
         "script.js", "favicon.svg",
     ]
     result = []
-    tmp_dir = Path(tempfile.mkdtemp(prefix="vps_sync_"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="blog_tpl_"))
     for fname in files_to_sync:
         try:
-            resp = httpx.get(f"{base}/{fname}", timeout=15, follow_redirects=True)
+            resp = httpx.get(f"{base}/{fname}", timeout=20, follow_redirects=True)
             if resp.status_code == 200:
                 local = tmp_dir / fname
                 local.write_bytes(resp.content)
                 result.append(local)
         except Exception:
-            logger.debug("Could not fetch %s from GitHub", fname)
-    logger.info("Fetched %d website files from GitHub for VPS sync", len(result))
+            logger.debug("Could not fetch template %s", fname)
+    logger.info("Fetched %d website template files from %s", len(result), base)
     return result
 
 

@@ -79,7 +79,7 @@ async def trigger_daily_report():
 
 @router.post("/trigger/blog-sync")
 async def trigger_blog_sync():
-    """Force regeneration of all blog pages + SFTP push to VPS."""
+    """Регенерація HTML блогу + доставка: API imin-backend (пріоритет) або SFTP."""
     from scheduler.blog_sync import sync_blog_to_vps
     try:
         count = await sync_blog_to_vps()
