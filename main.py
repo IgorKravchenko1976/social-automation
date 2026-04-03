@@ -77,67 +77,6 @@ async def _safe(coro, label: str) -> None:
         logger.exception("Startup [%s] FAILED — continuing anyway", label)
 
 
-async def _run_geo_test() -> None:
-    """One-time test: research 2 locations from today's posts, send results as emails."""
-    import uuid
-    import json as _json
-    from datetime import datetime, timezone
-
-    from db.database import async_session
-    from db.models import GeoResearchTask, GeoResearchStatus
-    from geo_agent.researcher import research_location
-    from geo_agent.email_report import send_geo_result_email
-
-    posts = [
-        {"lat": -20.2833, "lon": 57.4333, "name": "Ланкеві, Маврикій"},
-        {"lat": 32.0809, "lon": -81.0912, "name": "Savannah, Georgia, USA"},
-    ]
-
-    for post in posts:
-        request_id = str(uuid.uuid4())
-        received_at = datetime.now(timezone.utc)
-        logger.info("GEO TEST: researching %s (%.4f, %.4f)", post["name"], post["lat"], post["lon"])
-
-        async with async_session() as session:
-            task = GeoResearchTask(
-                request_id=request_id, latitude=post["lat"], longitude=post["lon"],
-                name=post["name"], language="uk",
-                status=GeoResearchStatus.PROCESSING, received_at=received_at,
-            )
-            session.add(task)
-            await session.commit()
-            task_id = task.id
-
-        result = await research_location(
-            latitude=post["lat"], longitude=post["lon"],
-            name=post["name"], language="uk",
-        )
-        completed_at = datetime.now(timezone.utc)
-        secs = (completed_at - received_at).total_seconds()
-
-        async with async_session() as session:
-            db_task = await session.get(GeoResearchTask, task_id)
-            if result:
-                db_task.status = GeoResearchStatus.COMPLETED
-                db_task.result = _json.dumps(result, ensure_ascii=False)
-            else:
-                db_task.status = GeoResearchStatus.EMPTY
-            db_task.completed_at = completed_at
-            await session.commit()
-
-        if result:
-            ok = await send_geo_result_email(
-                request_id=request_id, lat=post["lat"], lon=post["lon"],
-                name=post["name"], language="uk",
-                received_at=received_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                completed_at=completed_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                processing_secs=secs, result=result,
-            )
-            logger.info("GEO TEST: %s — email %s", post["name"], "sent" if ok else "FAILED")
-        else:
-            logger.info("GEO TEST: %s — empty result, no email", post["name"])
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
@@ -169,10 +108,6 @@ async def lifespan(app: FastAPI):
 
     from scheduler.server_monitor import start_monitor_loop, stop_monitor
     monitor_task = asyncio.create_task(start_monitor_loop())
-
-    # --- ONE-TIME GEO TEST: remove after confirming emails ---
-    await _safe(_run_geo_test(), "geo_test")
-    # --- END ONE-TIME GEO TEST ---
 
     logger.info("Social Media Automation is running! Schedule: %s (%s)",
                 settings.post_schedule, settings.timezone)
