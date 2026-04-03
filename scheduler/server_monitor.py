@@ -1,8 +1,7 @@
 """Multi-server uptime monitor with combined email alerting.
 
-Monitors two servers in parallel:
-  Server 1 (www.im-in.net) — Node.js app + static site
-  Server 2 (api-v2.im-in.net) — Go API + PostgreSQL
+  Server 1 (www.im-in.net) — статичний маркетинговий сайт (nginx + HTML).
+  Server 2–3 — Go API (api-v2 / api-v21): health, ping, Swagger.
 
 On failure: sends ONE combined alert email for all servers via Resend.
 On recovery: sends recovery email when all checks pass again.
@@ -44,17 +43,17 @@ SERVERS: dict[str, dict] = {
                 "name": "TCP з'єднання (ping)",
                 "type": "tcp",
             },
-            "api_docs": {
-                "name": "API (api-docs)",
-                "url": "https://www.im-in.net/compass-app-node/v3/api-docs",
+            "sitemap": {
+                "name": "SEO (sitemap.xml)",
+                "url": "https://www.im-in.net/sitemap.xml",
             },
             "website": {
                 "name": "Веб-сайт (index.html)",
                 "url": "https://www.im-in.net/index.html",
             },
-            "swagger_ui": {
-                "name": "Swagger UI",
-                "url": "https://www.im-in.net/webjars/swagger-ui/index.html",
+            "robots": {
+                "name": "SEO (robots.txt)",
+                "url": "https://www.im-in.net/robots.txt",
             },
         },
     },
@@ -78,7 +77,7 @@ SERVERS: dict[str, dict] = {
             },
             "api_docs": {
                 "name": "API Docs (Swagger)",
-                "url": "https://api-v2.im-in.net/api/v1/docs",
+                "url": "https://api-v2.im-in.net/v1/api/docs",
             },
         },
     },
@@ -102,7 +101,7 @@ SERVERS: dict[str, dict] = {
             },
             "api_docs": {
                 "name": "API Docs (Swagger)",
-                "url": "https://api-v21.im-in.net/api/v1/docs",
+                "url": "https://api-v21.im-in.net/v1/api/docs",
             },
         },
     },
