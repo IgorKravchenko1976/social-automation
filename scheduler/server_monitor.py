@@ -1,7 +1,6 @@
 """Multi-server uptime monitor with combined email alerting.
 
-  Server 1 (www.im-in.net) — статичний маркетинговий сайт (nginx + HTML).
-  Server 2–3 — Go API (api-v2 / api-v21): health, ping, Swagger.
+  Go API servers (api-v2 / api-v21): health, ping, Swagger.
 
 On failure: sends ONE combined alert email for all servers via Resend.
 On recovery: sends recovery email when all checks pass again.
@@ -34,29 +33,6 @@ RESEND_URL = "https://api.resend.com/emails"
 # ---------------------------------------------------------------------------
 
 SERVERS: dict[str, dict] = {
-    "im-in-main": {
-        "label": "I'M IN Main",
-        "host": "www.im-in.net",
-        "port": 443,
-        "checks": {
-            "tcp_connect": {
-                "name": "TCP з'єднання (ping)",
-                "type": "tcp",
-            },
-            "sitemap": {
-                "name": "SEO (sitemap.xml)",
-                "url": "https://www.im-in.net/sitemap.xml",
-            },
-            "website": {
-                "name": "Веб-сайт (index.html)",
-                "url": "https://www.im-in.net/index.html",
-            },
-            "robots": {
-                "name": "SEO (robots.txt)",
-                "url": "https://www.im-in.net/robots.txt",
-            },
-        },
-    },
     "im-in-api-v2": {
         "label": "I'M IN API v2",
         "host": "api-v2.im-in.net",
