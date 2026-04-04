@@ -66,6 +66,19 @@ def _setup_scheduler() -> None:
     scheduler.add_job(process_geo_queue, "interval", minutes=2,
                       id="geo_research_queue", replace_existing=True)
 
+    from geo_agent.backend_client import is_configured as _backend_ok, trigger_build_queue
+    if _backend_ok():
+        async def _daily_build_queue():
+            try:
+                result = await trigger_build_queue()
+                logger.info("[geo] Daily queue rebuild: %s", result)
+            except Exception as exc:
+                logger.warning("[geo] Daily queue rebuild failed: %s", exc)
+
+        scheduler.add_job(_daily_build_queue, CronTrigger(hour=6, minute=0, timezone=tz),
+                          id="geo_build_queue_daily", replace_existing=True)
+        logger.info("[geo] Backend mode enabled — daily queue rebuild at 06:00")
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 

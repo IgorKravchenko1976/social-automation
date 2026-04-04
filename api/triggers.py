@@ -89,6 +89,43 @@ async def trigger_blog_sync():
         return {"status": "error", "error": str(e)}
 
 
+@router.post("/trigger/geo-build-queue")
+async def trigger_geo_build_queue():
+    """Trigger imin-backend research queue rebuild."""
+    from geo_agent.backend_client import trigger_build_queue, is_configured
+    if not is_configured():
+        return {"status": "error", "error": "IMIN_BACKEND_API_BASE or IMIN_BACKEND_SYNC_KEY not set"}
+    try:
+        result = await trigger_build_queue()
+        return {"status": "ok", "backend_response": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.get("/trigger/geo-queue-status")
+async def trigger_geo_queue_status():
+    """Get imin-backend research queue status."""
+    from geo_agent.backend_client import get_queue_status, is_configured
+    if not is_configured():
+        return {"status": "error", "error": "IMIN_BACKEND_API_BASE or IMIN_BACKEND_SYNC_KEY not set"}
+    try:
+        result = await get_queue_status()
+        return {"status": "ok", "backend_response": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/geo-process")
+async def trigger_geo_process():
+    """Manually trigger one geo-research processing cycle."""
+    from geo_agent.processor import process_geo_queue
+    try:
+        await process_geo_queue()
+        return {"status": "ok", "message": "One processing cycle completed"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @router.post("/trigger/health-check")
 async def trigger_health_check():
     from scheduler.health_check import run_health_check

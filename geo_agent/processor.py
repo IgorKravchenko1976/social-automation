@@ -1,6 +1,9 @@
 """Queue processor for geo-research tasks.
 
-Picks the oldest QUEUED task, runs AI research, stores result.
+Two modes:
+  1. Backend mode (primary): fetch tasks from imin-backend API, run AI, submit back.
+  2. Local mode (fallback): pick from local SQLite queue if backend is not configured.
+
 Rate-limited to 10 AI calls per 24 hours.
 """
 from __future__ import annotations
@@ -15,6 +18,7 @@ from sqlalchemy import select, func as sa_func
 from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent.researcher import research_location
+from geo_agent import backend_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,7 @@ _lock = asyncio.Lock()
 
 
 async def _count_processed_last_24h() -> int:
-    """Count tasks completed (or emptied) in the last 24 hours."""
+    """Count tasks completed (or emptied) in the last 24 hours (local DB)."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     async with async_session() as session:
         result = await session.execute(
@@ -39,7 +43,7 @@ async def _count_processed_last_24h() -> int:
 
 
 async def _pick_next_task() -> GeoResearchTask | None:
-    """Return the oldest QUEUED task, or None."""
+    """Return the oldest QUEUED task from local DB, or None."""
     async with async_session() as session:
         result = await session.execute(
             select(GeoResearchTask)
@@ -50,64 +54,172 @@ async def _pick_next_task() -> GeoResearchTask | None:
         return result.scalars().first()
 
 
-async def process_geo_queue() -> None:
-    """Process the next task in the geo-research queue.
+async def _log_to_local_db(
+    research_code: str,
+    lat: float,
+    lng: float,
+    result_data: dict | None,
+    status: GeoResearchStatus,
+    error: str | None = None,
+) -> None:
+    """Save a record of backend task processing to local DB for audit."""
+    try:
+        async with async_session() as session:
+            task = GeoResearchTask(
+                request_id=research_code,
+                latitude=lat,
+                longitude=lng,
+                name=f"backend:{research_code}",
+                language="uk",
+                status=status,
+                received_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+                result=json.dumps(result_data, ensure_ascii=False) if result_data else None,
+                error_message=error,
+            )
+            session.add(task)
+            await session.commit()
+    except Exception as exc:
+        logger.warning("[geo-processor] Local DB audit log failed: %s", exc)
 
-    Called by scheduler every 2 minutes. Processes one task per run.
-    Respects the 10-per-24h rate limit.
-    """
-    async with _lock:
-        processed = await _count_processed_last_24h()
-        if processed >= DAILY_LIMIT:
-            logger.debug("Geo-research daily limit reached (%d/%d)", processed, DAILY_LIMIT)
-            return
 
-        task = await _pick_next_task()
-        if task is None:
-            return
+async def _process_backend_task() -> bool:
+    """Fetch one task from imin-backend, research it, submit result. Returns True if processed."""
+    try:
+        task = await backend_client.fetch_next_task()
+    except Exception as exc:
+        logger.warning("[geo-processor] Failed to fetch from backend: %s", exc)
+        return False
 
-        logger.info(
-            "Processing geo-research %s: %.4f, %.4f (%s)",
-            task.request_id, task.latitude, task.longitude, task.name or "no name",
+    if task is None:
+        return False
+
+    logger.info(
+        "[geo-processor] Backend task: code=%s cluster=%s (%.4f, %.4f) priority=%.2f",
+        task.research_code, task.cluster_code,
+        task.center_latitude, task.center_longitude, task.priority,
+    )
+
+    try:
+        result = await research_location(
+            latitude=task.center_latitude,
+            longitude=task.center_longitude,
+            name=None,
+            language="uk",
+        )
+
+        if result is None:
+            await backend_client.submit_result(
+                research_code=task.research_code,
+                content="",
+                summary="",
+                no_change=True,
+            )
+            await _log_to_local_db(
+                task.research_code, task.center_latitude, task.center_longitude,
+                None, GeoResearchStatus.EMPTY,
+            )
+            logger.info("[geo-processor] Backend task %s: no data (noChange)", task.research_code)
+            return True
+
+        content = json.dumps(result, ensure_ascii=False)
+        summary = result.get("summary", "")
+
+        await backend_client.submit_result(
+            research_code=task.research_code,
+            content=content,
+            summary=summary,
+            no_change=False,
+        )
+        await _log_to_local_db(
+            task.research_code, task.center_latitude, task.center_longitude,
+            result, GeoResearchStatus.COMPLETED,
+        )
+        logger.info("[geo-processor] Backend task %s: completed", task.research_code)
+        return True
+
+    except Exception as exc:
+        logger.exception("[geo-processor] Backend task %s failed", task.research_code)
+        await _log_to_local_db(
+            task.research_code, task.center_latitude, task.center_longitude,
+            None, GeoResearchStatus.FAILED, str(exc)[:1000],
+        )
+        return False
+
+
+async def _process_local_task() -> bool:
+    """Process one task from local SQLite DB. Returns True if processed."""
+    task = await _pick_next_task()
+    if task is None:
+        return False
+
+    logger.info(
+        "[geo-processor] Local task %s: %.4f, %.4f (%s)",
+        task.request_id, task.latitude, task.longitude, task.name or "no name",
+    )
+
+    async with async_session() as session:
+        db_task = await session.get(GeoResearchTask, task.id)
+        if db_task is None or db_task.status != GeoResearchStatus.QUEUED:
+            return False
+        db_task.status = GeoResearchStatus.PROCESSING
+        await session.commit()
+
+    try:
+        result = await research_location(
+            latitude=task.latitude,
+            longitude=task.longitude,
+            name=task.name,
+            language=task.language,
         )
 
         async with async_session() as session:
             db_task = await session.get(GeoResearchTask, task.id)
-            if db_task is None or db_task.status != GeoResearchStatus.QUEUED:
-                return
-
-            db_task.status = GeoResearchStatus.PROCESSING
+            now = datetime.now(timezone.utc)
+            if result is None:
+                db_task.status = GeoResearchStatus.EMPTY
+                db_task.completed_at = now
+            else:
+                db_task.status = GeoResearchStatus.COMPLETED
+                db_task.result = json.dumps(result, ensure_ascii=False)
+                db_task.completed_at = now
             await session.commit()
 
+        return True
+
+    except Exception as exc:
+        logger.exception("[geo-processor] Local task %s failed", task.request_id)
+        async with async_session() as session:
+            db_task = await session.get(GeoResearchTask, task.id)
+            db_task.status = GeoResearchStatus.FAILED
+            db_task.error_message = str(exc)[:1000]
+            db_task.completed_at = datetime.now(timezone.utc)
+            await session.commit()
+        return False
+
+
+async def process_geo_queue() -> None:
+    """Process the next geo-research task.
+
+    Called by scheduler every 2 minutes. Processes one task per run.
+    Respects the 10-per-24h rate limit.
+    Prefers backend API tasks; falls back to local queue.
+    """
+    async with _lock:
         try:
-            result = await research_location(
-                latitude=task.latitude,
-                longitude=task.longitude,
-                name=task.name,
-                language=task.language,
-            )
+            processed = await _count_processed_last_24h()
+        except Exception:
+            processed = 0
 
-            async with async_session() as session:
-                db_task = await session.get(GeoResearchTask, task.id)
-                now = datetime.now(timezone.utc)
+        if processed >= DAILY_LIMIT:
+            logger.debug("[geo-processor] Daily limit reached (%d/%d)", processed, DAILY_LIMIT)
+            return
 
-                if result is None:
-                    db_task.status = GeoResearchStatus.EMPTY
-                    db_task.completed_at = now
-                    logger.info("Geo-research %s: empty result", task.request_id)
-                else:
-                    db_task.status = GeoResearchStatus.COMPLETED
-                    db_task.result = json.dumps(result, ensure_ascii=False)
-                    db_task.completed_at = now
-                    logger.info("Geo-research %s: completed", task.request_id)
+        if backend_client.is_configured():
+            if await _process_backend_task():
+                return
 
-                await session.commit()
-
+        try:
+            await _process_local_task()
         except Exception as exc:
-            logger.exception("Geo-research %s failed", task.request_id)
-            async with async_session() as session:
-                db_task = await session.get(GeoResearchTask, task.id)
-                db_task.status = GeoResearchStatus.FAILED
-                db_task.error_message = str(exc)[:1000]
-                db_task.completed_at = datetime.now(timezone.utc)
-                await session.commit()
+            logger.debug("[geo-processor] Local task skipped: %s", exc)

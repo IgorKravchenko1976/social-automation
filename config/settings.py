@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # Шаблони кореня сайту (blog.html тощо). Порожньо = GitLab raw imin-backend web/marketing.
     marketing_template_base_url: str = ""
 
+    # IM-IN Backend Geo-Research API (bot fetches tasks and submits results)
+    imin_backend_api_base: str = ""
+    imin_backend_sync_key: str = ""
+
     # Persistent data directory (mount Railway Volume here)
     data_dir: str = "/data"
 
