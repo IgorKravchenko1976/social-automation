@@ -85,7 +85,7 @@ async def _log_to_local_db(
 
 
 async def _process_backend_task() -> bool:
-    """Fetch one task from imin-backend, research it, submit result. Returns True if processed."""
+    """Fetch one task from imin-backend, research all missing levels, submit results."""
     try:
         task = await backend_client.fetch_next_task()
     except Exception as exc:
@@ -95,70 +95,29 @@ async def _process_backend_task() -> bool:
     if task is None:
         return False
 
+    missing = task.missing_levels or ["location"]
+    scope_keys = task.scope_keys or {}
+
     logger.info(
-        "[geo-processor] Backend task: code=%s cluster=%s (%.4f, %.4f) priority=%.2f",
+        "[geo-processor] Backend task: code=%s cluster=%s (%.4f, %.4f) missing=%s",
         task.research_code, task.cluster_code,
-        task.center_latitude, task.center_longitude, task.priority,
+        task.center_latitude, task.center_longitude, missing,
     )
 
     try:
-        result = await research_location(
-            latitude=task.center_latitude,
-            longitude=task.center_longitude,
-            name=None,
-            language="uk",
-            expected_country=task.country_code,
-        )
+        # 1. Always process location level first (uses the research_code from queue)
+        location_result = await _process_single_level(task, "location", scope_keys.get("location", task.cluster_code))
 
-        if result is None:
-            await backend_client.submit_result(
-                research_code=task.research_code,
-                content="",
-                summary="",
-                no_change=True,
-            )
-            await _log_to_local_db(
-                task.research_code, task.center_latitude, task.center_longitude,
-                None, GeoResearchStatus.EMPTY,
-            )
-            logger.info("[geo-processor] Backend task %s: no data (noChange)", task.research_code)
-            return True
+        # 2. Process other missing levels (district, city, country)
+        for level in missing:
+            if level == "location":
+                continue
+            sk = scope_keys.get(level, "")
+            if not sk:
+                continue
+            await _process_level_standalone(task, level, sk)
 
-        if result.get("_rejected"):
-            reject_reason = result.get("_reject_reason", "editorial check failed")
-            content = json.dumps(result, ensure_ascii=False)
-            summary = result.get("summary", "")
-            await backend_client.submit_rejected(
-                research_code=task.research_code,
-                content=content,
-                summary=summary,
-                reject_reason=reject_reason,
-            )
-            await _log_to_local_db(
-                task.research_code, task.center_latitude, task.center_longitude,
-                result, GeoResearchStatus.FAILED, reject_reason,
-            )
-            logger.warning("[geo-processor] Backend task %s: REJECTED — %s", task.research_code, reject_reason)
-            return True
-
-        content = json.dumps(result, ensure_ascii=False)
-        summary = result.get("summary", "")
-
-        await backend_client.submit_result(
-            research_code=task.research_code,
-            content=content,
-            summary=summary,
-            no_change=False,
-        )
-        await _log_to_local_db(
-            task.research_code, task.center_latitude, task.center_longitude,
-            result, GeoResearchStatus.COMPLETED,
-        )
-        logger.info("[geo-processor] Backend task %s: completed", task.research_code)
-
-        await _create_event_for_research(task, result)
-
-        return True
+        return location_result
 
     except Exception as exc:
         logger.exception("[geo-processor] Backend task %s failed", task.research_code)
@@ -167,6 +126,93 @@ async def _process_backend_task() -> bool:
             None, GeoResearchStatus.FAILED, str(exc)[:1000],
         )
         return False
+
+
+async def _process_single_level(task: backend_client.NextTask, level: str, scope_key: str) -> bool:
+    """Process a single research level using the main research_code from the queue."""
+    result = await research_location(
+        latitude=task.center_latitude,
+        longitude=task.center_longitude,
+        name=None,
+        language="uk",
+        expected_country=task.country_code,
+        level=level,
+    )
+
+    if result is None:
+        await backend_client.submit_result(
+            research_code=task.research_code,
+            content="", summary="", no_change=True,
+            research_level=level, scope_key=scope_key,
+        )
+        await _log_to_local_db(
+            task.research_code, task.center_latitude, task.center_longitude,
+            None, GeoResearchStatus.EMPTY,
+        )
+        logger.info("[geo-processor] %s level=%s: no data", task.research_code, level)
+        return True
+
+    if result.get("_rejected"):
+        reject_reason = result.get("_reject_reason", "editorial check failed")
+        content = json.dumps(result, ensure_ascii=False)
+        await backend_client.submit_rejected(
+            research_code=task.research_code,
+            content=content, summary=result.get("summary", ""),
+            reject_reason=reject_reason,
+        )
+        await _log_to_local_db(
+            task.research_code, task.center_latitude, task.center_longitude,
+            result, GeoResearchStatus.FAILED, reject_reason,
+        )
+        logger.warning("[geo-processor] %s level=%s: REJECTED", task.research_code, level)
+        return True
+
+    content = json.dumps(result, ensure_ascii=False)
+    summary = result.get("summary", "")
+    await backend_client.submit_result(
+        research_code=task.research_code,
+        content=content, summary=summary, no_change=False,
+        research_level=level, scope_key=scope_key,
+    )
+    await _log_to_local_db(
+        task.research_code, task.center_latitude, task.center_longitude,
+        result, GeoResearchStatus.COMPLETED,
+    )
+    logger.info("[geo-processor] %s level=%s: completed", task.research_code, level)
+
+    if level == "location":
+        await _create_event_for_research(task, result)
+
+    return True
+
+
+async def _process_level_standalone(task: backend_client.NextTask, level: str, scope_key: str) -> None:
+    """Generate and submit a non-location level research (district/city/country)."""
+    try:
+        result = await research_location(
+            latitude=task.center_latitude,
+            longitude=task.center_longitude,
+            name=None, language="uk",
+            expected_country=task.country_code,
+            level=level,
+        )
+
+        if result is None or result.get("_rejected"):
+            logger.info("[geo-processor] %s level=%s: skipped (empty/rejected)", task.cluster_code, level)
+            return
+
+        content = json.dumps(result, ensure_ascii=False)
+        summary = result.get("summary", "")
+        await backend_client.submit_level_result(
+            research_level=level,
+            scope_key=scope_key,
+            content=content,
+            summary=summary,
+        )
+        logger.info("[geo-processor] %s level=%s scope=%s: submitted", task.cluster_code, level, scope_key)
+
+    except Exception as exc:
+        logger.warning("[geo-processor] Level %s for %s failed: %s", level, task.cluster_code, exc)
 
 
 async def _create_event_for_research(task: backend_client.NextTask, result: dict) -> None:

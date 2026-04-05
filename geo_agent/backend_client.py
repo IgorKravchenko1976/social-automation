@@ -31,6 +31,8 @@ class NextTask:
     point_count: int
     research_code: str
     country_code: str = ""
+    scope_keys: dict = None
+    missing_levels: list = None
 
 
 def _headers() -> dict[str, str]:
@@ -68,6 +70,8 @@ async def fetch_next_task() -> Optional[NextTask]:
         point_count=data.get("pointCount", 0),
         research_code=data["researchCode"],
         country_code=data.get("countryCode", ""),
+        scope_keys=data.get("scopeKeys", {}),
+        missing_levels=data.get("missingLevels", []),
     )
 
 
@@ -76,6 +80,8 @@ async def submit_result(
     content: str,
     summary: str,
     no_change: bool = False,
+    research_level: str = "location",
+    scope_key: str = "",
 ) -> bool:
     """POST /v1/api/research/result — returns True on success."""
     if not is_configured():
@@ -86,6 +92,8 @@ async def submit_result(
         "content": content,
         "summary": summary,
         "noChange": no_change,
+        "researchLevel": research_level,
+        "scopeKey": scope_key,
     }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -97,6 +105,39 @@ async def submit_result(
         resp.raise_for_status()
         data = resp.json()
 
+    return data.get("ok", False)
+
+
+async def submit_level_result(
+    research_level: str,
+    scope_key: str,
+    content: str,
+    summary: str,
+    no_change: bool = False,
+) -> bool:
+    """POST /v1/api/research/level-result — submit non-location level research."""
+    if not is_configured():
+        return False
+
+    payload = {
+        "researchLevel": research_level,
+        "scopeKey": scope_key,
+        "content": content,
+        "summary": summary,
+        "noChange": no_change,
+    }
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/level-result",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("skipped"):
+        logger.info("[backend] Level %s scope=%s already exists, skipped", research_level, scope_key)
     return data.get("ok", False)
 
 
