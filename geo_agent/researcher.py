@@ -1,14 +1,16 @@
-"""AI-powered geo-location researcher with hierarchical levels.
+"""AI-powered geo-location researcher with multi-source verification.
 
-Two-step verification:
-  Step 1: Reverse-geocode coordinates via Nominatim (OpenStreetMap) for exact address
-  Step 2: AI generates content ONLY about the verified place from real address data
+Data-first approach:
+  Step 1: Gather REAL data from multiple sources (Nominatim, Overpass, Wikipedia)
+  Step 2: Build verified geo-chain with concrete place names
+  Step 3: AI writes research ONLY about verified places (never invents)
+  Step 4: If no concrete place found — SKIP (better no data than wrong data)
 
 Levels:
-  - location (~200m): specific POI, building, monument
-  - district (~2km): neighborhood character, local attractions
-  - city (~10km): city overview, transport, major landmarks
-  - country: tourist overview, visa, currency, regions
+  - location (~200m): specific POI found via Overpass/Nominatim
+  - district (~2km): neighborhood from Nominatim address
+  - city: city from Nominatim address
+  - country: country-level overview
 """
 from __future__ import annotations
 
@@ -24,70 +26,91 @@ logger = logging.getLogger(__name__)
 
 MAX_SUMMARY_CHARS = 8_000
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
-NOMINATIM_HEADERS = {"User-Agent": "ImInApp/1.0 (research bot; igork2011@gmail.com)"}
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+WIKIPEDIA_API = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
+HTTP_HEADERS = {"User-Agent": "ImInApp/1.0 (research bot; igork2011@gmail.com)"}
 
+POI_SEARCH_RADIUS = 200  # meters
 
-# ── Step 2: Level-specific content generation ──
+OVERPASS_QUERY_TEMPLATE = """
+[out:json][timeout:10];
+(
+  node(around:{radius},{lat},{lng})["tourism"];
+  node(around:{radius},{lat},{lng})["historic"];
+  node(around:{radius},{lat},{lng})["amenity"~"^(place_of_worship|theatre|cinema|library|museum|arts_centre|fountain|marketplace|community_centre)$"];
+  node(around:{radius},{lat},{lng})["leisure"~"^(park|garden|nature_reserve|beach_resort|marina|playground)$"];
+  node(around:{radius},{lat},{lng})["natural"~"^(beach|peak|cave_entrance|cliff|spring|waterfall)$"];
+  node(around:{radius},{lat},{lng})["man_made"~"^(lighthouse|tower|windmill|watermill|pier|bridge)$"];
+  way(around:{radius},{lat},{lng})["tourism"];
+  way(around:{radius},{lat},{lng})["historic"];
+  way(around:{radius},{lat},{lng})["leisure"~"^(park|garden|nature_reserve|beach_resort|marina)$"];
+  way(around:{radius},{lat},{lng})["natural"~"^(beach|peak|cave_entrance|cliff|spring|waterfall)$"];
+  way(around:{radius},{lat},{lng})["man_made"~"^(lighthouse|tower|windmill|watermill|pier|bridge)$"];
+  relation(around:{radius},{lat},{lng})["tourism"];
+  relation(around:{radius},{lat},{lng})["historic"];
+  relation(around:{radius},{lat},{lng})["leisure"~"^(park|garden|nature_reserve)$"];
+);
+out center tags 20;
+"""
+
+# ── AI prompts (AI only writes about VERIFIED places) ──
 
 PROMPT_LOCATION = """Ти — місцевий гід-експерт.
-Тобі дають ПЕРЕВІРЕНУ інформацію про конкретне місце. Напиши дослідження.
+Тобі дають ПЕРЕВІРЕНІ ДАНІ про конкретне місце з реальних джерел (карти, Wikipedia).
+Напиши дослідження на основі ТІЛЬКИ цих даних. НЕ вигадуй нічого зайвого.
 
 Поверни JSON:
 {
-  "location_name": "ТОЧНА назва місця (з верифікації)",
+  "location_name": "ТОЧНА назва місця (з наданих даних)",
   "country_code": "ISO alpha-2 код країни",
-  "summary": "Що саме знаходиться в цій точці. 1-2 абзаци.",
-  "history": [{"period": "рік/період", "description": "що відбувалось саме тут"}],
+  "summary": "Опис цього місця на основі наданих даних. 1-2 абзаци.",
+  "history": [{"period": "рік/період", "description": "що відбувалось тут"}],
   "places": [{"name": "Назва", "type": "museum/monument/restaurant/hotel/park/church/shop", "description": "опис", "url": "посилання або null"}],
   "news": [{"title": "Заголовок", "description": "Опис", "source": "джерело"}]
 }
 
 КРИТИЧНО:
-1. Пиши ТІЛЬКИ про вказане місце (±200м)!
-2. location_name — назва з верифікації, НЕ змінюй!
-3. Місця (places) — лише ті що РЕАЛЬНО в радіусі 200м.
-4. НЕ пиши про все місто. Тільки ця конкретна точка.
-5. Тільки факти. Поверни ТІЛЬКИ JSON."""
+1. location_name — ТОЧНА назва з наданих даних! НЕ змінюй!
+2. Пиши ТІЛЬКИ про факти з наданих джерел. НЕ ВИГАДУЙ додаткову інформацію.
+3. Якщо дані з Wikipedia — використай їх для history та summary.
+4. places — тільки ті POI що надані в даних, НЕ вигадуй додаткових.
+5. Поверни ТІЛЬКИ JSON."""
 
 PROMPT_DISTRICT = """Ти — краєзнавець-дослідник.
-Тобі дають ПЕРЕВІРЕНУ назву району та місто. Напиши дослідження ЦЬОГО РАЙОНУ.
+Тобі дають ПЕРЕВІРЕНУ назву району та місто. Напиши дослідження.
 
 Поверни JSON:
 {
-  "location_name": "Назва району (з верифікації)",
+  "location_name": "Назва району, Місто",
   "country_code": "ISO alpha-2 код країни",
-  "summary": "Характеристика ЦЬОГО району: атмосфера, тип забудови, чим відомий. 2-3 абзаци.",
-  "history": [{"period": "рік/період", "description": "історія ЦЬОГО району"}],
+  "summary": "Характеристика цього району. 2-3 абзаци.",
+  "history": [{"period": "рік/період", "description": "історія цього району"}],
   "places": [{"name": "Назва", "type": "тип", "description": "опис", "url": "або null"}],
   "news": [{"title": "Заголовок", "description": "Опис", "source": "джерело"}]
 }
 
 КРИТИЧНО:
-1. Пиши ТІЛЬКИ про вказаний район! НЕ про інше місто!
-2. location_name — район з верифікації + місто. Наприклад: "Старе місто, Ларнака".
-3. Місця — головні атракції ЦЬОГО РАЙОНУ (5-10 шт), НЕ всього міста.
-4. Якщо район — це центр Ларнаки, пиши про центр Ларнаки, а не про Лімасол!
-5. Тільки факти. Поверни ТІЛЬКИ JSON."""
+1. Пиши ТІЛЬКИ про вказаний район вказаного міста!
+2. location_name — район + місто з верифікації.
+3. Тільки факти. Поверни ТІЛЬКИ JSON."""
 
 PROMPT_CITY = """Ти — туристичний експерт.
-Тобі дають ПЕРЕВІРЕНУ назву міста. Напиши повний огляд ЦЬОГО МІСТА для туриста.
+Тобі дають ПЕРЕВІРЕНУ назву міста. Напиши огляд для туриста.
 
 Поверни JSON:
 {
-  "location_name": "Назва міста (з верифікації)",
+  "location_name": "Назва міста",
   "country_code": "ISO alpha-2 код країни",
-  "summary": "Повний огляд ЦЬОГО КОНКРЕТНОГО МІСТА: населення, клімат, транспорт, кухня. 3-4 абзаци.",
-  "history": [{"period": "рік/період", "description": "ключові моменти історії ЦЬОГО міста"}],
-  "places": [{"name": "Назва", "type": "тип", "description": "чому варто відвідати", "url": "або null"}],
-  "news": [{"title": "Заголовок", "description": "Новини ЦЬОГО міста", "source": "джерело"}]
+  "summary": "Огляд міста: населення, клімат, транспорт, кухня. 3-4 абзаци.",
+  "history": [{"period": "рік/період", "description": "ключові моменти історії"}],
+  "places": [{"name": "Назва", "type": "тип", "description": "опис", "url": "або null"}],
+  "news": [{"title": "Заголовок", "description": "Новини міста", "source": "джерело"}]
 }
 
 КРИТИЧНО:
-1. Пиши ТІЛЬКИ про вказане місто! Якщо місто Ларнака — пиши про Ларнаку, НЕ про Лімасол чи Фамагусту!
-2. location_name — назва міста з верифікації, НЕ змінюй на інше місто!
-3. Місця — ТОП-10 must-visit місць ЦЬОГО МІСТА, не іншого.
-4. Історія — ключові віхи ЦЬОГО міста.
-5. Тільки факти. Поверни ТІЛЬКИ JSON."""
+1. Пиши ТІЛЬКИ про вказане місто!
+2. location_name — назва з верифікації, НЕ змінюй!
+3. Тільки факти. Поверни ТІЛЬКИ JSON."""
 
 PROMPT_COUNTRY = """Ти — експерт з міжнародного туризму.
 Тобі дають код країни — зроби повний туристичний огляд.
@@ -96,17 +119,13 @@ PROMPT_COUNTRY = """Ти — експерт з міжнародного тури
 {
   "location_name": "Назва країни",
   "country_code": "ISO alpha-2 код країни",
-  "summary": "Повний туристичний огляд: клімат, сезон, візи, валюта, мова, безпека, кухня. 4-5 абзаців.",
+  "summary": "Туристичний огляд: клімат, сезон, візи, валюта, мова, безпека, кухня. 4-5 абзаців.",
   "history": [{"period": "рік/період", "description": "ключові моменти історії"}],
-  "places": [{"name": "Регіон/місто", "type": "region/city/island/park", "description": "чому варто відвідати", "url": "або null"}],
+  "places": [{"name": "Регіон/місто", "type": "region/city/island/park", "description": "опис", "url": "або null"}],
   "news": [{"title": "Заголовок", "description": "Актуальне для туристів", "source": "джерело"}]
 }
 
-ПРАВИЛА:
-1. Фокус на ТУРИСТИЧНІЙ інформації.
-2. Місця — ТОП-10 регіонів/міст КРАЇНИ.
-3. Практична інформація: візи, валюта, мова, безпека, транспорт.
-4. Тільки факти. Поверни ТІЛЬКИ JSON."""
+Тільки факти. Поверни ТІЛЬКИ JSON."""
 
 LEVEL_PROMPTS = {
     "location": PROMPT_LOCATION,
@@ -116,112 +135,270 @@ LEVEL_PROMPTS = {
 }
 
 
-# ── Editorial verification (Step 3) ──
+# ── Step 1a: Nominatim reverse geocoding ──
 
-EDITORIAL_CHECK_PROMPT = """Ти — редактор-верифікатор. Перевір чи контент відповідає ПРАВИЛЬНОМУ місцю.
-
-Тобі дають:
-1. Координати (latitude, longitude)
-2. Верифіковану гео-інформацію (geo_chain)
-3. Рівень дослідження (level)
-4. Згенерований контент
-
-Перевір:
-- Чи location_name відповідає гео-ланцюжку? (район=район, місто=місто)
-- Чи контент описує ПРАВИЛЬНЕ місце, а не сусіднє місто/район?
-- Чи country_code відповідає очікуваному?
-
-Поверни JSON:
-{
-  "passed": true/false,
-  "detected_city": "яке місто насправді описується в контенті",
-  "expected_city": "яке місто ПОВИННО описуватися",
-  "reason": "коротке пояснення"
-}
-
-ПРАВИЛА ВІДБРАКОВКИ (passed=false):
-- Контент про ІНШЕ місто ніж в geo_chain
-- Район описує інше місто
-- location_name не відповідає рівню (наприклад, для district рівня вказано назву країни)
-- Поверни ТІЛЬКИ JSON."""
-
-
-async def _identify_geo_chain(client, latitude: float, longitude: float, expected_country: str) -> dict | None:
-    """Step 1: Reverse-geocode via Nominatim to get real address data."""
+async def _nominatim_reverse(lat: float, lng: float) -> dict | None:
+    """Get address data from OpenStreetMap Nominatim."""
     try:
-        async with httpx.AsyncClient(timeout=10, headers=NOMINATIM_HEADERS) as http:
+        async with httpx.AsyncClient(timeout=10, headers=HTTP_HEADERS) as http:
             resp = await http.get(NOMINATIM_URL, params={
-                "lat": latitude,
-                "lon": longitude,
-                "format": "json",
-                "addressdetails": 1,
-                "zoom": 18,
-                "accept-language": "uk,en",
+                "lat": lat, "lon": lng,
+                "format": "json", "addressdetails": 1,
+                "zoom": 18, "accept-language": "uk,en",
+                "extratags": 1,
             })
             resp.raise_for_status()
             data = resp.json()
 
         addr = data.get("address", {})
-        display = data.get("display_name", "")
+        extratags = data.get("extratags") or {}
 
         location_name = (
-            addr.get("amenity")
-            or addr.get("tourism")
-            or addr.get("building")
-            or addr.get("leisure")
-            or addr.get("shop")
-            or addr.get("road", "")
+            addr.get("amenity") or addr.get("tourism")
+            or addr.get("building") or addr.get("leisure")
+            or addr.get("shop") or addr.get("road", "")
         )
         house = addr.get("house_number", "")
         if house and location_name:
             location_name = f"{location_name}, {house}"
 
         district = (
-            addr.get("suburb")
-            or addr.get("city_district")
-            or addr.get("neighbourhood")
-            or addr.get("quarter")
-            or ""
+            addr.get("suburb") or addr.get("city_district")
+            or addr.get("neighbourhood") or addr.get("quarter") or ""
         )
         city = (
-            addr.get("city")
-            or addr.get("town")
-            or addr.get("village")
-            or addr.get("municipality")
-            or ""
+            addr.get("city") or addr.get("town")
+            or addr.get("village") or addr.get("municipality") or ""
         )
         region = (
-            addr.get("state")
-            or addr.get("county")
-            or addr.get("state_district")
-            or ""
+            addr.get("state") or addr.get("county")
+            or addr.get("state_district") or ""
         )
         country = addr.get("country", "")
         country_code = (addr.get("country_code") or "").upper()
 
-        chain = {
-            "location": location_name or "невідомо",
-            "district": district or "невідомо",
-            "city": city or "невідомо",
-            "region": region or "невідомо",
-            "country": country or "невідомо",
-            "country_code": country_code or "??",
-            "confidence": "high" if city else ("medium" if country else "low"),
-            "display_name": display,
+        wiki_title = extratags.get("wikipedia", "")
+
+        return {
+            "location": location_name or "",
+            "district": district or "",
+            "city": city or "",
+            "region": region or "",
+            "country": country or "",
+            "country_code": country_code or "",
+            "display_name": data.get("display_name", ""),
+            "nominatim_wiki": wiki_title,
+            "osm_type": data.get("osm_type", ""),
+            "osm_id": data.get("osm_id", ""),
+            "category": data.get("category", ""),
+            "type": data.get("type", ""),
         }
 
-        logger.info(
-            "[researcher] Nominatim geo-chain: %s → %s → %s → %s (%s) confidence=%s",
-            chain["location"], chain["district"],
-            chain["city"], chain["country"],
-            chain["country_code"], chain["confidence"],
-        )
-        return chain
-
     except Exception:
-        logger.exception("[researcher] Nominatim reverse-geocode failed for %s, %s", latitude, longitude)
+        logger.exception("[researcher] Nominatim failed for %s, %s", lat, lng)
         return None
 
+
+# ── Step 1b: Overpass POI search ──
+
+async def _overpass_pois(lat: float, lng: float, radius: int = POI_SEARCH_RADIUS) -> list[dict]:
+    """Find Points of Interest near coordinates via Overpass API."""
+    query = OVERPASS_QUERY_TEMPLATE.format(radius=radius, lat=lat, lng=lng)
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=HTTP_HEADERS) as http:
+            resp = await http.post(OVERPASS_URL, data={"data": query})
+            resp.raise_for_status()
+            data = resp.json()
+
+        pois = []
+        for el in data.get("elements", []):
+            tags = el.get("tags", {})
+            name = tags.get("name") or tags.get("name:uk") or tags.get("name:en")
+            if not name:
+                continue
+
+            poi = {
+                "name": name,
+                "name_uk": tags.get("name:uk", ""),
+                "name_en": tags.get("name:en", ""),
+                "type": (
+                    tags.get("tourism") or tags.get("historic")
+                    or tags.get("amenity") or tags.get("leisure")
+                    or tags.get("natural") or tags.get("man_made") or ""
+                ),
+                "wikipedia": tags.get("wikipedia", ""),
+                "wikidata": tags.get("wikidata", ""),
+                "website": tags.get("website", ""),
+                "description": tags.get("description", ""),
+            }
+            pois.append(poi)
+
+        pois.sort(key=lambda p: (1 if p["wikipedia"] else 0, 1 if p["website"] else 0), reverse=True)
+        logger.info("[researcher] Overpass found %d POIs near %s, %s", len(pois), lat, lng)
+        return pois[:15]
+
+    except Exception:
+        logger.warning("[researcher] Overpass failed for %s, %s — continuing without POIs", lat, lng)
+        return []
+
+
+# ── Step 1c: Wikipedia summary ──
+
+async def _wikipedia_summary(wiki_ref: str) -> dict | None:
+    """Fetch Wikipedia summary. wiki_ref format: 'en:Article_Name' or 'uk:Назва'."""
+    if not wiki_ref or ":" not in wiki_ref:
+        return None
+
+    lang, title = wiki_ref.split(":", 1)
+    url = WIKIPEDIA_API.format(lang=lang, title=title.replace(" ", "_"))
+
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=HTTP_HEADERS) as http:
+            resp = await http.get(url)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+
+        return {
+            "title": data.get("title", ""),
+            "extract": data.get("extract", ""),
+            "description": data.get("description", ""),
+            "url": data.get("content_urls", {}).get("desktop", {}).get("page", ""),
+        }
+
+    except Exception:
+        logger.warning("[researcher] Wikipedia fetch failed for %s", wiki_ref)
+        return None
+
+
+# ── Step 2: Build verified geo-chain ──
+
+async def _build_geo_chain(lat: float, lng: float, expected_country: str) -> dict | None:
+    """Gather data from all sources and build a verified geo-chain.
+
+    Returns None if we cannot confidently identify the location.
+    """
+    nominatim = await _nominatim_reverse(lat, lng)
+    if nominatim is None:
+        return None
+
+    city = nominatim.get("city", "")
+    country_code = nominatim.get("country_code", "")
+
+    if not city and not country_code:
+        logger.warning("[researcher] Nominatim returned no city/country for %s, %s", lat, lng)
+        return None
+
+    if expected_country and country_code and country_code != expected_country.upper():
+        logger.warning("[researcher] Country mismatch: nominatim=%s expected=%s", country_code, expected_country)
+        return None
+
+    pois = await _overpass_pois(lat, lng)
+
+    best_poi = pois[0] if pois else None
+
+    wiki_data = None
+    wiki_ref = ""
+    if best_poi and best_poi.get("wikipedia"):
+        wiki_ref = best_poi["wikipedia"]
+    elif nominatim.get("nominatim_wiki"):
+        wiki_ref = nominatim["nominatim_wiki"]
+    if wiki_ref:
+        wiki_data = await _wikipedia_summary(wiki_ref)
+
+    location_name = ""
+    if best_poi:
+        location_name = best_poi.get("name_uk") or best_poi.get("name") or ""
+    if not location_name:
+        location_name = nominatim.get("location", "")
+
+    chain = {
+        "location": location_name,
+        "location_type": best_poi.get("type", "") if best_poi else nominatim.get("type", ""),
+        "district": nominatim.get("district", ""),
+        "city": city,
+        "region": nominatim.get("region", ""),
+        "country": nominatim.get("country", ""),
+        "country_code": country_code,
+        "display_name": nominatim.get("display_name", ""),
+        "pois": pois,
+        "best_poi": best_poi,
+        "wikipedia": wiki_data,
+        "has_concrete_location": bool(best_poi and best_poi.get("name")),
+        "confidence": "high" if best_poi else ("medium" if city else "low"),
+    }
+
+    logger.info(
+        "[researcher] Geo-chain: location='%s' (%s) → district='%s' → city='%s' → %s (%s) "
+        "| POIs=%d | wiki=%s | confidence=%s",
+        chain["location"], chain["location_type"],
+        chain["district"], chain["city"],
+        chain["country"], chain["country_code"],
+        len(pois), "yes" if wiki_data else "no",
+        chain["confidence"],
+    )
+    return chain
+
+
+# ── Step 3: Content generation ──
+
+def _build_ai_context(geo_chain: dict, level: str, lat: float, lng: float, language: str) -> str:
+    """Build the AI prompt with all verified data."""
+    parts = [
+        f"Координати: {lat}, {lng}",
+        f"Мова відповіді: {language}",
+        "",
+        "ВЕРИФІКОВАНІ ДАНІ З РЕАЛЬНИХ ДЖЕРЕЛ:",
+        f"  Локація: {geo_chain.get('location', 'невідомо')} (тип: {geo_chain.get('location_type', '?')})",
+        f"  Район: {geo_chain.get('district', 'невідомо')}",
+        f"  Місто: {geo_chain.get('city', 'невідомо')}",
+        f"  Область: {geo_chain.get('region', 'невідомо')}",
+        f"  Країна: {geo_chain.get('country', 'невідомо')} ({geo_chain.get('country_code', '?')})",
+    ]
+
+    if level == "location":
+        pois = geo_chain.get("pois", [])
+        if pois:
+            parts.append("")
+            parts.append(f"ЗНАЙДЕНІ POI В РАДІУСІ {POI_SEARCH_RADIUS}М (з OpenStreetMap):")
+            for p in pois[:10]:
+                line = f"  • {p['name']} (тип: {p['type']})"
+                if p.get("description"):
+                    line += f" — {p['description']}"
+                if p.get("website"):
+                    line += f" | {p['website']}"
+                parts.append(line)
+
+        wiki = geo_chain.get("wikipedia")
+        if wiki:
+            parts.append("")
+            parts.append("ДАНІ З WIKIPEDIA:")
+            parts.append(f"  Назва: {wiki.get('title', '')}")
+            parts.append(f"  Опис: {wiki.get('description', '')}")
+            extract = wiki.get("extract", "")
+            if extract:
+                parts.append(f"  Текст: {extract[:1500]}")
+            if wiki.get("url"):
+                parts.append(f"  URL: {wiki['url']}")
+
+        parts.append("")
+        parts.append(f"ЗАВДАННЯ: Напиши дослідження про '{geo_chain.get('location', '')}' в місті {geo_chain.get('city', '')}.")
+        parts.append("ВИКОРИСТОВУЙ ТІЛЬКИ НАДАНІ ДАНІ. НЕ ВИГАДУЙ.")
+
+    elif level == "district":
+        parts.append("")
+        parts.append(f"ЗАВДАННЯ: Напиши про район '{geo_chain.get('district', '')}' міста {geo_chain.get('city', '')}.")
+
+    elif level == "city":
+        parts.append("")
+        parts.append(f"ЗАВДАННЯ: Напиши огляд міста '{geo_chain.get('city', '')}'.")
+        parts.append(f"УВАГА: Пиши ТІЛЬКИ про {geo_chain.get('city', '')}!")
+
+    parts.append("\nПоверни JSON.")
+    return "\n".join(parts)
+
+
+# ── Main entry point ──
 
 async def research_location(
     latitude: float,
@@ -231,44 +408,48 @@ async def research_location(
     expected_country: str = "",
     level: str = "location",
 ) -> dict | None:
-    """Research a geographic location at a given detail level.
+    """Research a geographic location using multi-source verified data.
 
-    Two-step process:
-      1. Identify exact geo-chain (location → district → city → country)
-      2. Generate content only about the verified place
+    For location level: requires a concrete named POI from Overpass/Nominatim.
+    If no concrete place found — returns None (skip, don't invent).
     """
     client = get_client()
 
     if level == "country":
         return await _research_country(client, expected_country, language)
 
-    geo_chain = await _identify_geo_chain(client, latitude, longitude, expected_country)
+    geo_chain = await _build_geo_chain(latitude, longitude, expected_country)
     if geo_chain is None:
-        logger.warning("[researcher] Cannot identify geo-chain, skipping %s, %s level=%s", latitude, longitude, level)
+        logger.warning("[researcher] Cannot build geo-chain, skipping %s, %s level=%s", latitude, longitude, level)
         return None
 
-    if geo_chain.get("confidence") == "low":
-        logger.warning("[researcher] Low confidence for %s, %s — skipping level=%s", latitude, longitude, level)
+    if level == "location" and not geo_chain.get("has_concrete_location"):
+        logger.info(
+            "[researcher] No concrete POI found for %s, %s — skipping location level "
+            "(only road/address: '%s')", latitude, longitude, geo_chain.get("location", "?"),
+        )
         return None
 
-    chain_country = (geo_chain.get("country_code") or "").upper()
-    if expected_country and chain_country and chain_country != expected_country.upper():
-        logger.warning("[researcher] Geo-chain country %s != expected %s, skipping", chain_country, expected_country)
+    if level == "district" and not geo_chain.get("district"):
+        logger.info("[researcher] No district data for %s, %s — skipping", latitude, longitude)
+        return None
+
+    if level in ("city", "district") and not geo_chain.get("city"):
+        logger.info("[researcher] No city data for %s, %s — skipping level=%s", latitude, longitude, level)
         return None
 
     system_prompt = LEVEL_PROMPTS.get(level, PROMPT_LOCATION)
-
-    verified_context = _build_verified_context(geo_chain, level, latitude, longitude, language)
+    ai_context = _build_ai_context(geo_chain, level, latitude, longitude, language)
 
     try:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": verified_context},
+                {"role": "user", "content": ai_context},
             ],
             max_tokens=3000,
-            temperature=0.4,
+            temperature=0.3,
             response_format={"type": "json_object"},
         )
 
@@ -283,17 +464,14 @@ async def research_location(
             if not isinstance(result.get(key), list):
                 result[key] = []
 
-        check = await _editorial_check_v2(client, latitude, longitude, geo_chain, level, result)
-        if check is not None and not check.get("passed", True):
-            result["_rejected"] = True
-            result["_reject_reason"] = (
-                f"Editorial: expected city={check.get('expected_city', '?')}, "
-                f"detected city={check.get('detected_city', '?')}: "
-                f"{check.get('reason', 'no reason')}"
-            )
-            logger.warning("[researcher] REJECTED %s, %s level=%s: %s",
-                           latitude, longitude, level, result["_reject_reason"])
-            return result
+        if level == "city":
+            chain_city = (geo_chain.get("city") or "").lower()
+            result_name = (result.get("location_name") or "").lower()
+            if chain_city and result_name and chain_city not in result_name and result_name not in chain_city:
+                result["_rejected"] = True
+                result["_reject_reason"] = f"AI wrote about '{result.get('location_name')}' instead of '{geo_chain.get('city')}'"
+                logger.warning("[researcher] REJECTED: %s", result["_reject_reason"])
+                return result
 
         result["_geo_chain"] = geo_chain
         return result
@@ -306,36 +484,8 @@ async def research_location(
         raise
 
 
-def _build_verified_context(geo_chain: dict, level: str, lat: float, lng: float, language: str) -> str:
-    """Build the user prompt with verified geo-chain context."""
-    parts = [
-        f"Координати: {lat}, {lng}",
-        f"Мова відповіді: {language}",
-        "",
-        "ВЕРИФІКОВАНИЙ ГЕО-ЛАНЦЮЖОК (не змінюй!):",
-        f"  Локація: {geo_chain.get('location', 'невідомо')}",
-        f"  Район: {geo_chain.get('district', 'невідомо')}",
-        f"  Місто: {geo_chain.get('city', 'невідомо')}",
-        f"  Область: {geo_chain.get('region', 'невідомо')}",
-        f"  Країна: {geo_chain.get('country', 'невідомо')} ({geo_chain.get('country_code', '?')})",
-        "",
-    ]
-
-    if level == "location":
-        parts.append(f"ЗАВДАННЯ: Напиши дослідження про '{geo_chain.get('location', '')}' в місті {geo_chain.get('city', '')}.")
-    elif level == "district":
-        parts.append(f"ЗАВДАННЯ: Напиши дослідження про район '{geo_chain.get('district', '')}' міста {geo_chain.get('city', '')}.")
-        parts.append(f"УВАГА: Район належить місту {geo_chain.get('city', '')}! НЕ пиши про інші міста!")
-    elif level == "city":
-        parts.append(f"ЗАВДАННЯ: Напиши огляд міста '{geo_chain.get('city', '')}'.")
-        parts.append(f"УВАГА: Пиши ТІЛЬКИ про місто {geo_chain.get('city', '')}! НЕ плутай з іншими містами!")
-
-    parts.append("\nПоверни структуровану інформацію у форматі JSON.")
-    return "\n".join(parts)
-
-
 async def _research_country(client, country_code: str, language: str) -> dict | None:
-    """Generate country-level research (no geo-chain needed)."""
+    """Generate country-level research."""
     try:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
@@ -363,78 +513,4 @@ async def _research_country(client, country_code: str, language: str) -> dict | 
 
     except Exception:
         logger.exception("Country research failed for %s", country_code)
-        return None
-
-
-async def _editorial_check_v2(
-    client,
-    latitude: float,
-    longitude: float,
-    geo_chain: dict,
-    level: str,
-    research: dict,
-) -> Optional[dict]:
-    """Enhanced editorial check: verify geo-chain consistency."""
-    try:
-        ai_country = (research.get("country_code") or "").upper()
-        chain_country = (geo_chain.get("country_code") or "").upper()
-        if ai_country and chain_country and ai_country != chain_country:
-            return {
-                "passed": False,
-                "detected_city": research.get("location_name", "?"),
-                "expected_city": geo_chain.get("city", "?"),
-                "reason": f"country mismatch: content={ai_country}, chain={chain_country}",
-            }
-
-        location_name = (research.get("location_name") or "").lower()
-        chain_city = (geo_chain.get("city") or "").lower()
-        summary_lower = (research.get("summary") or "").lower()
-
-        if level == "city" and chain_city and location_name:
-            if chain_city not in location_name and location_name not in chain_city:
-                return {
-                    "passed": False,
-                    "detected_city": research.get("location_name", "?"),
-                    "expected_city": geo_chain.get("city", "?"),
-                    "reason": f"city level describes '{research.get('location_name')}' instead of '{geo_chain.get('city')}'",
-                }
-
-        if level in ("location", "district") and chain_city:
-            if chain_city not in summary_lower:
-                chain_district = (geo_chain.get("district") or "").lower()
-                if not chain_district or chain_district not in summary_lower:
-                    return {
-                        "passed": False,
-                        "detected_city": "?",
-                        "expected_city": geo_chain.get("city", "?"),
-                        "reason": f"content does not mention city '{geo_chain.get('city')}' or district '{geo_chain.get('district')}'",
-                    }
-
-        if level == "city":
-            check_prompt = (
-                f"Координати: {latitude}, {longitude}\n"
-                f"Рівень: {level}\n"
-                f"Гео-ланцюжок: місто={geo_chain.get('city')}, район={geo_chain.get('district')}, країна={geo_chain.get('country_code')}\n"
-                f"location_name в контенті: {research.get('location_name', '')}\n"
-                f"summary (перші 300 симв): {(research.get('summary') or '')[:300]}\n\n"
-                "Перевір: чи контент описує правильне місто з гео-ланцюжка?"
-            )
-
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": EDITORIAL_CHECK_PROMPT},
-                    {"role": "user", "content": check_prompt},
-                ],
-                max_tokens=300,
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
-
-            return json.loads(response.choices[0].message.content.strip())
-
-        return None
-
-    except Exception:
-        logger.warning("[researcher] Editorial check v2 failed, allowing content through")
         return None
