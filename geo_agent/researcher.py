@@ -387,6 +387,7 @@ async def _editorial_check_v2(
 
         location_name = (research.get("location_name") or "").lower()
         chain_city = (geo_chain.get("city") or "").lower()
+        summary_lower = (research.get("summary") or "").lower()
 
         if level == "city" and chain_city and location_name:
             if chain_city not in location_name and location_name not in chain_city:
@@ -397,27 +398,41 @@ async def _editorial_check_v2(
                     "reason": f"city level describes '{research.get('location_name')}' instead of '{geo_chain.get('city')}'",
                 }
 
-        check_prompt = (
-            f"Координати: {latitude}, {longitude}\n"
-            f"Рівень: {level}\n"
-            f"Гео-ланцюжок: місто={geo_chain.get('city')}, район={geo_chain.get('district')}, країна={geo_chain.get('country_code')}\n"
-            f"location_name в контенті: {research.get('location_name', '')}\n"
-            f"summary (перші 300 симв): {(research.get('summary') or '')[:300]}\n\n"
-            "Перевір: чи контент описує правильне місце з гео-ланцюжка?"
-        )
+        if level in ("location", "district") and chain_city:
+            if chain_city not in summary_lower:
+                chain_district = (geo_chain.get("district") or "").lower()
+                if not chain_district or chain_district not in summary_lower:
+                    return {
+                        "passed": False,
+                        "detected_city": "?",
+                        "expected_city": geo_chain.get("city", "?"),
+                        "reason": f"content does not mention city '{geo_chain.get('city')}' or district '{geo_chain.get('district')}'",
+                    }
 
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": EDITORIAL_CHECK_PROMPT},
-                {"role": "user", "content": check_prompt},
-            ],
-            max_tokens=300,
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
+        if level == "city":
+            check_prompt = (
+                f"Координати: {latitude}, {longitude}\n"
+                f"Рівень: {level}\n"
+                f"Гео-ланцюжок: місто={geo_chain.get('city')}, район={geo_chain.get('district')}, країна={geo_chain.get('country_code')}\n"
+                f"location_name в контенті: {research.get('location_name', '')}\n"
+                f"summary (перші 300 симв): {(research.get('summary') or '')[:300]}\n\n"
+                "Перевір: чи контент описує правильне місто з гео-ланцюжка?"
+            )
 
-        return json.loads(response.choices[0].message.content.strip())
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": EDITORIAL_CHECK_PROMPT},
+                    {"role": "user", "content": check_prompt},
+                ],
+                max_tokens=300,
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+
+            return json.loads(response.choices[0].message.content.strip())
+
+        return None
 
     except Exception:
         logger.warning("[researcher] Editorial check v2 failed, allowing content through")

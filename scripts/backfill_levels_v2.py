@@ -107,7 +107,7 @@ async def process_cluster(cluster: dict, level: str) -> bool:
 
 
 async def main():
-    for level in ("district", "city"):
+    for level in ("location", "district", "city"):
         logger.info("=== Generating %s level ===", level)
         for cluster in CLUSTERS:
             await process_cluster(cluster, level)
