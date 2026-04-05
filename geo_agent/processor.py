@@ -107,6 +107,7 @@ async def _process_backend_task() -> bool:
             longitude=task.center_longitude,
             name=None,
             language="uk",
+            expected_country=task.country_code,
         )
 
         if result is None:
@@ -121,6 +122,23 @@ async def _process_backend_task() -> bool:
                 None, GeoResearchStatus.EMPTY,
             )
             logger.info("[geo-processor] Backend task %s: no data (noChange)", task.research_code)
+            return True
+
+        if result.get("_rejected"):
+            reject_reason = result.get("_reject_reason", "editorial check failed")
+            content = json.dumps(result, ensure_ascii=False)
+            summary = result.get("summary", "")
+            await backend_client.submit_rejected(
+                research_code=task.research_code,
+                content=content,
+                summary=summary,
+                reject_reason=reject_reason,
+            )
+            await _log_to_local_db(
+                task.research_code, task.center_latitude, task.center_longitude,
+                result, GeoResearchStatus.FAILED, reject_reason,
+            )
+            logger.warning("[geo-processor] Backend task %s: REJECTED — %s", task.research_code, reject_reason)
             return True
 
         content = json.dumps(result, ensure_ascii=False)

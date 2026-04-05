@@ -30,6 +30,7 @@ class NextTask:
     priority: float
     point_count: int
     research_code: str
+    country_code: str = ""
 
 
 def _headers() -> dict[str, str]:
@@ -66,6 +67,7 @@ async def fetch_next_task() -> Optional[NextTask]:
         priority=data.get("priority", 0),
         point_count=data.get("pointCount", 0),
         research_code=data["researchCode"],
+        country_code=data.get("countryCode", ""),
     )
 
 
@@ -89,6 +91,35 @@ async def submit_result(
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.post(
             f"{_base()}/v1/api/research/result",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    return data.get("ok", False)
+
+
+async def submit_rejected(
+    research_code: str,
+    content: str,
+    summary: str,
+    reject_reason: str,
+) -> bool:
+    """POST /v1/api/research/reject — submit rejected research to errors DB."""
+    if not is_configured():
+        return False
+
+    payload = {
+        "researchCode": research_code,
+        "content": content,
+        "summary": summary,
+        "rejectReason": reject_reason,
+    }
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/reject",
             headers=_headers(),
             json=payload,
         )
@@ -153,6 +184,20 @@ async def create_research_event(
                 data=data,
             )
 
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def get_daily_stats() -> dict:
+    """GET /v1/api/research/daily-stats — today's research statistics."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/daily-stats",
+            headers=_headers(),
+        )
         resp.raise_for_status()
         return resp.json()
 

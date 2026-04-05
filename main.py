@@ -79,6 +79,11 @@ def _setup_scheduler() -> None:
                           id="geo_build_queue_daily", replace_existing=True)
         logger.info("[geo] Backend mode enabled — daily queue rebuild at 06:00")
 
+        from geo_agent.daily_report import send_daily_research_report
+        scheduler.add_job(send_daily_research_report, CronTrigger(hour=21, minute=0, timezone=tz),
+                          id="geo_daily_report", replace_existing=True)
+        logger.info("[geo] Daily research report at 21:00")
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 

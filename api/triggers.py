@@ -126,6 +126,17 @@ async def trigger_geo_process():
         return {"status": "error", "error": str(e)}
 
 
+@router.post("/trigger/geo-daily-report")
+async def trigger_geo_daily_report():
+    """Manually trigger daily research email report."""
+    from geo_agent.daily_report import send_daily_research_report
+    try:
+        ok = await send_daily_research_report()
+        return {"status": "ok" if ok else "skipped", "sent": ok}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @router.post("/trigger/health-check")
 async def trigger_health_check():
     from scheduler.health_check import run_health_check
