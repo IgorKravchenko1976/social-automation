@@ -295,6 +295,7 @@ async def research_location(
                            latitude, longitude, level, result["_reject_reason"])
             return result
 
+        result["_geo_chain"] = geo_chain
         return result
 
     except json.JSONDecodeError:

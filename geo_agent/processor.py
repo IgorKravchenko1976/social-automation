@@ -85,7 +85,7 @@ async def _log_to_local_db(
 
 
 async def _process_backend_task() -> bool:
-    """Fetch one task from imin-backend, research all missing levels, submit results."""
+    """Fetch one task from imin-backend, research location + auto-fill full chain."""
     try:
         task = await backend_client.fetch_next_task()
     except Exception as exc:
@@ -95,27 +95,20 @@ async def _process_backend_task() -> bool:
     if task is None:
         return False
 
-    missing = task.missing_levels or ["location"]
     scope_keys = task.scope_keys or {}
 
     logger.info(
-        "[geo-processor] Backend task: code=%s cluster=%s (%.4f, %.4f) missing=%s",
+        "[geo-processor] Backend task: code=%s cluster=%s (%.4f, %.4f)",
         task.research_code, task.cluster_code,
-        task.center_latitude, task.center_longitude, missing,
+        task.center_latitude, task.center_longitude,
     )
 
     try:
-        # 1. Always process location level first (uses the research_code from queue)
-        location_result = await _process_single_level(task, "location", scope_keys.get("location", task.cluster_code))
+        location_result = await _process_single_level(
+            task, "location", scope_keys.get("location", task.cluster_code),
+        )
 
-        # 2. Process other missing levels (district, city, country)
-        for level in missing:
-            if level == "location":
-                continue
-            sk = scope_keys.get(level, "")
-            if not sk:
-                continue
-            await _process_level_standalone(task, level, sk)
+        await _auto_fill_chain(task, scope_keys)
 
         return location_result
 
@@ -126,6 +119,24 @@ async def _process_backend_task() -> bool:
             None, GeoResearchStatus.FAILED, str(exc)[:1000],
         )
         return False
+
+
+async def _auto_fill_chain(task: backend_client.NextTask, scope_keys: dict) -> None:
+    """Auto-generate district → city → country if they don't exist yet.
+
+    Uses submit_level_result which skips if already exists (backend dedup).
+    """
+    for level in ("district", "city", "country"):
+        sk = scope_keys.get(level, "")
+        if level == "country" and not sk:
+            sk = task.country_code
+        if not sk:
+            sk = task.cluster_code
+
+        try:
+            await _process_level_standalone(task, level, sk)
+        except Exception as exc:
+            logger.warning("[geo-processor] Auto-fill %s failed for %s: %s", level, task.cluster_code, exc)
 
 
 async def _process_single_level(task: backend_client.NextTask, level: str, scope_key: str) -> bool:
