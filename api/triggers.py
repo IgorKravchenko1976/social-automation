@@ -77,6 +77,103 @@ async def trigger_daily_report():
         }
 
 
+@router.post("/trigger/announce-release")
+async def trigger_announce_release():
+    """Create and publish a special App Store release announcement to all platforms."""
+    from config.platforms import configured_platforms, get_platform_instance
+    from db.database import async_session
+    from db.models import Post, Publication
+    from content.generator import translate_post
+    from content.media import get_image_for_post
+    import json
+
+    announcement_text = (
+        "🎉 I'M IN вже в App Store! 🚀\n\n"
+        "Безкоштовний додаток для мандрівників тепер доступний для завантаження! "
+        "Створюйте фото та відео події з прив'язкою до карти, знаходьте цікаві місця "
+        "навколо, спілкуйтесь з мандрівниками з усього світу.\n\n"
+        "📱 Що всередині:\n"
+        "• Інтерактивна карта з подіями від мандрівників\n"
+        "• Вбудована камера з фільтрами\n"
+        "• Чат в реальному часі з автоперекладачем\n"
+        "• Офлайн карти та GPS без інтернету\n"
+        "• Ланцюжки подій — створюйте фотоісторії подорожей\n"
+        "• Відстеження друзів на карті\n"
+        "• 8 мов інтерфейсу\n\n"
+        "Завантажуй безкоштовно: https://apps.apple.com/app/im-in/id6502195381\n"
+        "🌍 www.im-in.net\n\n"
+        "#imin #travel #appstore #мандрівки #подорожі #ukraine"
+    )
+
+    try:
+        platforms = configured_platforms()
+        if not platforms:
+            return {"status": "error", "error": "No platforms configured"}
+
+        async with async_session() as session:
+            post = Post(
+                title="I'M IN вже в App Store! Безкоштовний додаток для мандрівників",
+                content_raw=announcement_text,
+                source="manual",
+            )
+            post.log_pipeline("topic", "ok", "Manual: App Store release announcement")
+            session.add(post)
+            await session.flush()
+
+            for platform in platforms:
+                session.add(Publication(post_id=post.id, platform=platform.value))
+
+            try:
+                tr = await translate_post(post.title or "", announcement_text)
+                if tr:
+                    post.translations = json.dumps(tr, ensure_ascii=False)
+            except Exception:
+                pass
+
+            await session.commit()
+            post_id = post.id
+
+        image_path = await get_image_for_post("travel app launch celebration world map adventure")
+
+        from config.platforms import Platform
+        results = {}
+        async with async_session() as session:
+            from sqlalchemy import select
+            pub_result = await session.execute(
+                select(Publication).where(Publication.post_id == post_id)
+            )
+            pubs = pub_result.scalars().all()
+
+            for pub in pubs:
+                try:
+                    adapter = get_platform_instance(Platform(pub.platform))
+                    result = await adapter.publish_text(announcement_text, image_path)
+
+                    if result.success:
+                        pub.status = "PUBLISHED"
+                        pub.platform_post_id = result.platform_post_id
+                        results[pub.platform] = "ok"
+                    else:
+                        pub.status = "FAILED"
+                        pub.error_message = result.error
+                        results[pub.platform] = f"error: {result.error}"
+                except Exception as e:
+                    pub.status = "FAILED"
+                    pub.error_message = str(e)[:500]
+                    results[pub.platform] = f"error: {str(e)[:200]}"
+
+            await session.commit()
+
+        if image_path:
+            from content.media import cleanup_media_file
+            cleanup_media_file(image_path)
+
+        return {"status": "ok", "post_id": post_id, "results": results}
+    except Exception as e:
+        logger.exception("Release announcement failed")
+        return {"status": "error", "error": str(e)}
+
+
 @router.post("/trigger/blog-sync")
 async def trigger_blog_sync():
     """Регенерація HTML блогу + доставка: API imin-backend (пріоритет) або SFTP."""
