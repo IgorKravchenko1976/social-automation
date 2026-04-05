@@ -233,13 +233,51 @@ async def _overpass_pois(lat: float, lng: float, radius: int = POI_SEARCH_RADIUS
             }
             pois.append(poi)
 
-        pois.sort(key=lambda p: (1 if p["wikipedia"] else 0, 1 if p["website"] else 0), reverse=True)
+        pois.sort(key=lambda p: _poi_score(p), reverse=True)
         logger.info("[researcher] Overpass found %d POIs near %s, %s", len(pois), lat, lng)
         return pois[:15]
 
     except Exception:
         logger.warning("[researcher] Overpass failed for %s, %s — continuing without POIs", lat, lng)
         return []
+
+
+TOURIST_POI_TYPES = {
+    "museum", "gallery", "artwork", "attraction", "viewpoint", "theme_park",
+    "monument", "memorial", "castle", "ruins", "archaeological_site", "fort",
+    "palace", "city_gate", "church", "cathedral", "monastery", "mosque", "temple",
+    "beach", "peak", "cave_entrance", "cliff", "spring", "waterfall",
+    "lighthouse", "tower", "windmill", "pier", "bridge",
+    "park", "garden", "nature_reserve", "beach_resort", "marina",
+    "theatre", "arts_centre", "fountain",
+    "hotel", "hostel", "camp_site", "guest_house", "chalet",
+}
+
+
+def _poi_score(poi: dict) -> int:
+    """Score a POI by tourist relevance. Higher = more interesting."""
+    score = 0
+    if poi.get("wikipedia"):
+        score += 10
+    if poi.get("wikidata"):
+        score += 3
+    if poi.get("website"):
+        score += 2
+    if poi.get("type", "") in TOURIST_POI_TYPES:
+        score += 5
+    if poi.get("description"):
+        score += 1
+    return score
+
+
+def _has_worthy_poi(pois: list[dict]) -> bool:
+    """Check if there's at least one POI worth researching (tourist/historic/natural)."""
+    for p in pois:
+        if p.get("type", "") in TOURIST_POI_TYPES:
+            return True
+        if p.get("wikipedia"):
+            return True
+    return False
 
 
 # ── Step 1c: Wikipedia summary ──
@@ -324,8 +362,8 @@ async def _build_geo_chain(lat: float, lng: float, expected_country: str) -> dic
         "pois": pois,
         "best_poi": best_poi,
         "wikipedia": wiki_data,
-        "has_concrete_location": bool(best_poi and best_poi.get("name")),
-        "confidence": "high" if best_poi else ("medium" if city else "low"),
+        "has_concrete_location": _has_worthy_poi(pois),
+        "confidence": "high" if _has_worthy_poi(pois) else ("medium" if city else "low"),
     }
 
     logger.info(
