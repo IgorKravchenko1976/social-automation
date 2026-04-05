@@ -1,8 +1,8 @@
 """AI-powered geo-location researcher with hierarchical levels.
 
 Two-step verification:
-  Step 1: AI identifies the exact geo-chain (location → district → city → country)
-  Step 2: AI generates content ONLY about the verified place
+  Step 1: Reverse-geocode coordinates via Nominatim (OpenStreetMap) for exact address
+  Step 2: AI generates content ONLY about the verified place from real address data
 
 Levels:
   - location (~200m): specific POI, building, monument
@@ -16,36 +16,15 @@ import json
 import logging
 from typing import Optional
 
+import httpx
+
 from content.ai_client import get_client
 
 logger = logging.getLogger(__name__)
 
 MAX_SUMMARY_CHARS = 8_000
-
-# ── Step 1: Geo-chain identification ──
-
-GEO_IDENTIFY_PROMPT = """Ти — географ-верифікатор. Твоє єдине завдання: точно визначити що знаходиться за координатами.
-
-Тобі дають GPS координати. Визнач ТОЧНИЙ ланцюжок геолокації:
-
-Поверни JSON:
-{
-  "location": "Що саме тут: назва вулиці, будівлі, парку, пляжу (в радіусі 200м)",
-  "district": "Назва району/кварталу міста (в радіусі 2 км)",
-  "city": "Назва міста або населеного пункту",
-  "region": "Область/провінція/округ",
-  "country": "Назва країни",
-  "country_code": "ISO alpha-2 код",
-  "confidence": "high/medium/low"
-}
-
-ПРАВИЛА:
-1. Використовуй ТІЛЬКИ загальновідомі географічні факти.
-2. Якщо не впевнений що саме тут — пиши "невідомо" і confidence: "low".
-3. НЕ ВИГАДУЙ назви! Краще написати "житловий квартал" ніж вигадати назву.
-4. district — це район МІСТА з поля city. Не плутай міста між собою!
-5. city — місто де знаходиться ЦЯ ТОЧКА, а не найближче відоме місто.
-6. Поверни ТІЛЬКИ JSON."""
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+NOMINATIM_HEADERS = {"User-Agent": "ImInApp/1.0 (research bot; igork2011@gmail.com)"}
 
 
 # ── Step 2: Level-specific content generation ──
@@ -168,35 +147,79 @@ EDITORIAL_CHECK_PROMPT = """Ти — редактор-верифікатор. П
 
 
 async def _identify_geo_chain(client, latitude: float, longitude: float, expected_country: str) -> dict | None:
-    """Step 1: Identify the exact geo-chain for coordinates."""
+    """Step 1: Reverse-geocode via Nominatim to get real address data."""
     try:
-        user_prompt = f"Координати: {latitude}, {longitude}"
-        if expected_country:
-            user_prompt += f"\nВідома країна: {expected_country}"
+        async with httpx.AsyncClient(timeout=10, headers=NOMINATIM_HEADERS) as http:
+            resp = await http.get(NOMINATIM_URL, params={
+                "lat": latitude,
+                "lon": longitude,
+                "format": "json",
+                "addressdetails": 1,
+                "zoom": 18,
+                "accept-language": "uk,en",
+            })
+            resp.raise_for_status()
+            data = resp.json()
 
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": GEO_IDENTIFY_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=500,
-            temperature=0.1,
-            response_format={"type": "json_object"},
+        addr = data.get("address", {})
+        display = data.get("display_name", "")
+
+        location_name = (
+            addr.get("amenity")
+            or addr.get("tourism")
+            or addr.get("building")
+            or addr.get("leisure")
+            or addr.get("shop")
+            or addr.get("road", "")
         )
+        house = addr.get("house_number", "")
+        if house and location_name:
+            location_name = f"{location_name}, {house}"
 
-        raw = response.choices[0].message.content.strip()
-        chain = json.loads(raw)
+        district = (
+            addr.get("suburb")
+            or addr.get("city_district")
+            or addr.get("neighbourhood")
+            or addr.get("quarter")
+            or ""
+        )
+        city = (
+            addr.get("city")
+            or addr.get("town")
+            or addr.get("village")
+            or addr.get("municipality")
+            or ""
+        )
+        region = (
+            addr.get("state")
+            or addr.get("county")
+            or addr.get("state_district")
+            or ""
+        )
+        country = addr.get("country", "")
+        country_code = (addr.get("country_code") or "").upper()
+
+        chain = {
+            "location": location_name or "невідомо",
+            "district": district or "невідомо",
+            "city": city or "невідомо",
+            "region": region or "невідомо",
+            "country": country or "невідомо",
+            "country_code": country_code or "??",
+            "confidence": "high" if city else ("medium" if country else "low"),
+            "display_name": display,
+        }
+
         logger.info(
-            "[researcher] Geo-chain: %s → %s → %s → %s (%s) confidence=%s",
-            chain.get("location", "?"), chain.get("district", "?"),
-            chain.get("city", "?"), chain.get("country", "?"),
-            chain.get("country_code", "?"), chain.get("confidence", "?"),
+            "[researcher] Nominatim geo-chain: %s → %s → %s → %s (%s) confidence=%s",
+            chain["location"], chain["district"],
+            chain["city"], chain["country"],
+            chain["country_code"], chain["confidence"],
         )
         return chain
 
     except Exception:
-        logger.exception("[researcher] Geo-chain identification failed for %s, %s", latitude, longitude)
+        logger.exception("[researcher] Nominatim reverse-geocode failed for %s, %s", latitude, longitude)
         return None
 
 
