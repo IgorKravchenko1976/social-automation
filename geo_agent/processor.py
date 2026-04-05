@@ -19,6 +19,7 @@ from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent.researcher import research_location
 from geo_agent import backend_client
+from content.media import get_image_for_post, cleanup_media_file
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,9 @@ async def _process_backend_task() -> bool:
             result, GeoResearchStatus.COMPLETED,
         )
         logger.info("[geo-processor] Backend task %s: completed", task.research_code)
+
+        await _create_event_for_research(task, result)
+
         return True
 
     except Exception as exc:
@@ -145,6 +149,56 @@ async def _process_backend_task() -> bool:
             None, GeoResearchStatus.FAILED, str(exc)[:1000],
         )
         return False
+
+
+async def _create_event_for_research(task: backend_client.NextTask, result: dict) -> None:
+    """Create a real event on imin-backend from completed research."""
+    try:
+        summary = result.get("summary", "")
+        location_name = result.get("location_name", "")
+        title = location_name or summary[:100] or f"Research: {task.cluster_code}"
+
+        parts = []
+        if summary:
+            parts.append(summary)
+
+        history_list = result.get("history", [])
+        if history_list and isinstance(history_list, list):
+            history_lines = [f"• {h.get('period', '')}: {h.get('description', '')}" for h in history_list[:5]]
+            parts.append("📜 Історія\n" + "\n".join(history_lines))
+
+        places_list = result.get("places", [])
+        if places_list and isinstance(places_list, list):
+            place_lines = [f"• {p.get('name', '')} — {p.get('description', '')}" for p in places_list[:5]]
+            parts.append("📍 Цікаві місця\n" + "\n".join(place_lines))
+
+        description = "\n\n".join(parts) if parts else summary
+
+        image_query = f"{location_name} travel landscape" if location_name else "travel landscape beautiful destination"
+        photo_path = await get_image_for_post(image_query, use_dalle=True)
+        logger.info(
+            "[geo-processor] Event image for %s: %s",
+            task.research_code, "found" if photo_path else "none",
+        )
+
+        resp = await backend_client.create_research_event(
+            research_code=task.research_code,
+            title=title[:200],
+            description=description[:4000],
+            latitude=task.center_latitude,
+            longitude=task.center_longitude,
+            photo_path=photo_path,
+        )
+
+        cleanup_media_file(photo_path)
+
+        if resp.get("ok"):
+            logger.info("[geo-processor] Event created: id=%s for %s", resp.get("eventId"), task.research_code)
+        else:
+            logger.warning("[geo-processor] Event creation response: %s", resp)
+
+    except Exception as exc:
+        logger.warning("[geo-processor] Event creation failed for %s: %s", task.research_code, exc)
 
 
 async def _process_local_task() -> bool:

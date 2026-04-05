@@ -112,6 +112,51 @@ async def trigger_build_queue() -> dict:
         return resp.json()
 
 
+async def create_research_event(
+    research_code: str,
+    title: str,
+    description: str,
+    latitude: float,
+    longitude: float,
+    photo_path: str | None = None,
+) -> dict:
+    """POST /v1/api/research/create-event — create a real event from research."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    data = {
+        "researchCode": research_code,
+        "title": title,
+        "description": description,
+        "latitude": str(latitude),
+        "longitude": str(longitude),
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        if photo_path:
+            import os
+            ct = "image/jpeg"
+            if photo_path.lower().endswith(".png"):
+                ct = "image/png"
+            with open(photo_path, "rb") as f:
+                files = {"photo": (os.path.basename(photo_path), f, ct)}
+                resp = await client.post(
+                    f"{_base()}/v1/api/research/create-event",
+                    headers=_headers(),
+                    data=data,
+                    files=files,
+                )
+        else:
+            resp = await client.post(
+                f"{_base()}/v1/api/research/create-event",
+                headers=_headers(),
+                data=data,
+            )
+
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def get_queue_status() -> dict:
     """GET /v1/api/research/queue-status — current queue state."""
     if not is_configured():
