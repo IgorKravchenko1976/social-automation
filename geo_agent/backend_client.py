@@ -281,6 +281,7 @@ class AirportTask:
     longitude: float
     priority: float = 0
     facility_type: str = "airport"
+    operational_status: str = "unknown"
 
 
 async def fetch_next_airport() -> Optional[AirportTask]:
@@ -306,6 +307,7 @@ async def fetch_next_airport() -> Optional[AirportTask]:
         longitude=data.get("longitude", 0),
         priority=data.get("priority", 0),
         facility_type=data.get("facilityType", "airport"),
+        operational_status=data.get("operationalStatus", "unknown"),
     )
 
 
@@ -315,6 +317,8 @@ async def submit_airport_result(
     event_id: int = 0,
     failed: bool = False,
     name_translations: dict | None = None,
+    operational_status: str = "",
+    status_reason: str = "",
 ) -> bool:
     """POST /v1/api/research/airport-result — submit research result for an airport."""
     if not is_configured():
@@ -329,6 +333,10 @@ async def submit_airport_result(
     if name_translations:
         import json as _json
         payload["nameTranslations"] = _json.dumps(name_translations, ensure_ascii=False)
+    if operational_status:
+        payload["operationalStatus"] = operational_status
+    if status_reason:
+        payload["statusReason"] = status_reason
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.post(

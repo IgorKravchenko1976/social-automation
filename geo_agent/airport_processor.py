@@ -149,6 +149,7 @@ async def _process_one_airport() -> bool:
             content=content_json[:10000],
             event_id=event_id,
             name_translations=name_translations,
+            operational_status=task.operational_status,
         )
 
         await _log_audit(
@@ -177,10 +178,20 @@ async def _process_one_airport() -> bool:
         return False
 
 
+_FACILITY_EMOJIS = {
+    "airport": ("🚌", "✈️"),
+    "aerodrome": ("🚌", "✈️"),
+    "railway": ("🚂", "🚆"),
+    "heliport": ("🚁", "🚁"),
+    "military": ("🏛️", "✈️"),
+    "bus": ("🚌", "🚍"),
+}
+
+
 def _build_event_description(result: dict) -> str:
     """Build event description from AI research result."""
     facility_type = result.get("facility_type", "airport")
-    is_railway = facility_type == "railway"
+    transport_emoji, facts_emoji = _FACILITY_EMOJIS.get(facility_type, ("🚌", "✈️"))
     parts = []
 
     desc = result.get("description", "")
@@ -193,15 +204,13 @@ def _build_event_description(result: dict) -> str:
 
     transport = result.get("transport", "")
     if transport:
-        emoji = "🚂" if is_railway else "🚌"
-        parts.append(f"\n{emoji} {transport}")
+        parts.append(f"\n{transport_emoji} {transport}")
 
     facts = result.get("facts", [])
     if facts and isinstance(facts, list):
         fact_lines = [f"• {f}" for f in facts[:5] if isinstance(f, str)]
         if fact_lines:
-            header_emoji = "🚆" if is_railway else "✈️"
-            parts.append(f"\n{header_emoji} " + "\n".join(fact_lines))
+            parts.append(f"\n{facts_emoji} " + "\n".join(fact_lines))
 
     return "\n".join(parts) if parts else desc
 

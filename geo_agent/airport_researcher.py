@@ -69,9 +69,99 @@ RAILWAY_PROMPT = """Ти — експерт з подорожей, який пи
 4. Повертай ТІЛЬКИ JSON."""
 
 
+HELIPORT_PROMPT = """Ти — експерт з подорожей, який пише про вертолітні майданчики для мандрівників.
+Ти отримуєш ПЕРЕВІРЕНІ дані з реальних джерел (Вікіпедія, карти).
+Напиши опис для мандрівників, використовуючи ТІЛЬКИ надані дані.
+
+Поверни JSON:
+{
+  "title": "Назва вертолітного майданчика (з наданих даних)",
+  "description": "Опис: розташування, призначення, доступність, цікаві факти. 2-3 абзаци.",
+  "city_info": "Коротка інформація про місто/район, де знаходиться.",
+  "transport": "Як дістатися (якщо відомо з даних).",
+  "facts": ["Цікавий факт 1", "Цікавий факт 2"]
+}
+
+КРИТИЧНО:
+1. Використовуй ТІЛЬКИ надані дані. НЕ вигадуй.
+2. Пиши УКРАЇНСЬКОЮ мовою.
+3. Фокусуйся на практичній інформації для мандрівників.
+4. Повертай ТІЛЬКИ JSON."""
+
+
+MILITARY_PROMPT = """Ти — експерт з подорожей, який пише про військові аеробази як цікаві місця.
+Ти отримуєш ПЕРЕВІРЕНІ дані з реальних джерел (Вікіпедія, карти).
+Напиши опис для мандрівників — фокус на історичному та авіаційному значенні.
+
+Поверни JSON:
+{
+  "title": "Назва авіабази (з наданих даних)",
+  "description": "Опис: історія, значення, авіаційні факти, доступність для туристів. 2-3 абзаци.",
+  "city_info": "Коротка інформація про місто/район.",
+  "transport": "Загальна інформація про розташування.",
+  "facts": ["Цікавий факт 1", "Цікавий факт 2"]
+}
+
+КРИТИЧНО:
+1. Використовуй ТІЛЬКИ надані дані. НЕ вигадуй.
+2. Пиши УКРАЇНСЬКОЮ мовою.
+3. Фокусуйся на історичних/авіаційних фактах, уникай військових деталей.
+4. Повертай ТІЛЬКИ JSON."""
+
+
+BUS_PROMPT = """Ти — експерт з подорожей, який пише про автобусні станції для мандрівників.
+Ти отримуєш ПЕРЕВІРЕНІ дані з реальних джерел (Вікіпедія, карти).
+Напиши опис для мандрівників, використовуючи ТІЛЬКИ надані дані.
+
+Поверни JSON:
+{
+  "title": "Назва автобусної станції (з наданих даних)",
+  "description": "Опис: розташування, маршрути, зручності, практичні поради. 2-3 абзаци.",
+  "city_info": "Коротка інформація про місто.",
+  "transport": "Основні напрямки та з'єднання з іншим транспортом.",
+  "facts": ["Цікавий факт 1", "Цікавий факт 2"]
+}
+
+КРИТИЧНО:
+1. Використовуй ТІЛЬКИ надані дані. НЕ вигадуй.
+2. Пиши УКРАЇНСЬКОЮ мовою.
+3. Фокусуйся на практичній інформації для мандрівників.
+4. Повертай ТІЛЬКИ JSON."""
+
+
+_FACILITY_PROMPTS = {
+    "airport": AIRPORT_PROMPT,
+    "aerodrome": AIRPORT_PROMPT,
+    "railway": RAILWAY_PROMPT,
+    "heliport": HELIPORT_PROMPT,
+    "military": MILITARY_PROMPT,
+    "bus": BUS_PROMPT,
+}
+
+_FACILITY_LABELS = {
+    "airport": "Аеропорт",
+    "aerodrome": "Аеродром",
+    "railway": "Залізничний вокзал",
+    "heliport": "Вертолітний майданчик",
+    "military": "Військова авіабаза",
+    "bus": "Автобусна станція",
+}
+
 _WIKI_KEYWORDS = {
     "airport": ["airport", "aerodrome", "aeroport"],
     "railway": ["railway", "station", "gare", "bahnhof", "stazione", "rail"],
+    "heliport": ["heliport", "helipad", "helicopter"],
+    "military": ["air base", "air force", "military", "airbase"],
+    "bus": ["bus station", "bus terminal", "coach"],
+}
+
+_IMAGE_QUERIES = {
+    "airport": "{name} airport terminal building",
+    "aerodrome": "{name} aerodrome airfield",
+    "railway": "{name} railway station building platform",
+    "heliport": "{name} heliport helicopter landing",
+    "military": "{name} air base aviation",
+    "bus": "{name} bus station terminal",
 }
 
 
@@ -171,14 +261,12 @@ async def research_airport(
 ) -> Optional[dict]:
     """Research a transport hub using Wikipedia + Nominatim + AI.
 
-    Args:
-        facility_type: 'airport' or 'railway'
+    Supports all facility types: airport, aerodrome, railway, heliport, military, bus.
 
     Returns dict with title, description, image_query or None on failure.
     """
     client = get_client()
-    is_railway = facility_type == "railway"
-    label = "Залізничний вокзал" if is_railway else "Аеропорт"
+    label = _FACILITY_LABELS.get(facility_type, "Аеропорт")
 
     wiki = await _wikipedia_search(name, iata, facility_type)
     nominatim = await _nominatim_location(lat, lng)
@@ -220,7 +308,7 @@ async def research_airport(
     context_parts.append("Поверни JSON.")
 
     ai_context = "\n".join(context_parts)
-    system_prompt = RAILWAY_PROMPT if is_railway else AIRPORT_PROMPT
+    system_prompt = _FACILITY_PROMPTS.get(facility_type, AIRPORT_PROMPT)
 
     try:
         response = await client.chat.completions.create(
@@ -248,10 +336,8 @@ async def research_airport(
         result["country_code"] = country_code
         result["wikipedia"] = wiki
 
-        if is_railway:
-            result["image_query"] = f"{name} railway station building platform"
-        else:
-            result["image_query"] = f"{name} airport terminal building"
+        img_tpl = _IMAGE_QUERIES.get(facility_type, "{name} airport terminal building")
+        result["image_query"] = img_tpl.format(name=name)
 
         logger.info("[transport-researcher] Research completed for %s (%s) [%s]", name, iata, facility_type)
         return result
