@@ -114,6 +114,12 @@ def _setup_scheduler() -> None:
                           id="airport_weekly_sync", replace_existing=True)
         logger.info("[airports] Weekly airport sync every Monday at 04:00")
 
+        # Fix/translate pipeline for existing events & airports
+        from geo_agent.fixer import run_fix_cycle
+        scheduler.add_job(run_fix_cycle, "interval", minutes=3,
+                          id="fix_translate_cycle", replace_existing=True)
+        logger.info("[fixer] Fix/translate cycle enabled — every 3 min")
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 

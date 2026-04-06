@@ -368,3 +368,98 @@ async def trigger_sync_airports() -> dict:
         )
         resp.raise_for_status()
         return resp.json()
+
+
+# ── Fix/update pipeline ──────────────────────────────────────────
+
+
+async def next_fix_event(mode: str = "translate") -> dict | None:
+    """GET /v1/api/research/fix-queue?mode=... — next event needing fix."""
+    if not is_configured():
+        return None
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/fix-queue",
+            params={"mode": mode},
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("empty"):
+        return None
+    return data
+
+
+async def submit_fix_event(
+    event_id: int,
+    *,
+    title: str = "",
+    description: str = "",
+    content_language: str = "",
+    translations: dict | None = None,
+    activate: bool = False,
+) -> bool:
+    """POST /v1/api/research/fix-event — update existing event."""
+    if not is_configured():
+        return False
+
+    import json as _json
+
+    payload: dict = {"eventId": event_id, "activate": activate}
+    if title:
+        payload["title"] = title
+    if description:
+        payload["description"] = description
+    if content_language:
+        payload["contentLanguage"] = content_language
+    if translations:
+        payload["translations"] = _json.dumps(translations, ensure_ascii=False)
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/fix-event",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json().get("ok", False)
+
+
+async def next_fix_airport() -> dict | None:
+    """GET /v1/api/research/fix-airport — next airport needing name translations."""
+    if not is_configured():
+        return None
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/fix-airport",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("empty"):
+        return None
+    return data
+
+
+async def submit_fix_airport(airport_id: int, name_translations: dict) -> bool:
+    """POST /v1/api/research/fix-airport — save name translations for airport."""
+    if not is_configured():
+        return False
+
+    import json as _json
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/fix-airport",
+            headers=_headers(),
+            json={
+                "id": airport_id,
+                "nameTranslations": _json.dumps(name_translations, ensure_ascii=False),
+            },
+        )
+        resp.raise_for_status()
+        return resp.json().get("ok", False)

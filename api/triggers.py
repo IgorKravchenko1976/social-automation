@@ -234,6 +234,39 @@ async def trigger_geo_daily_report():
         return {"status": "error", "error": str(e)}
 
 
+@router.post("/trigger/fix-cycle")
+async def trigger_fix_cycle():
+    """Manually trigger one fix/translate cycle for events + airports."""
+    from geo_agent.fixer import run_fix_cycle
+    try:
+        result = await run_fix_cycle()
+        return {"status": "ok", **result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/fix-events")
+async def trigger_fix_events(mode: str = "translate"):
+    """Fix events only (mode: translate | regenerate)."""
+    from geo_agent.fixer import fix_events_batch
+    try:
+        count = await fix_events_batch(mode=mode)
+        return {"status": "ok", "events_fixed": count, "mode": mode}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/fix-airports")
+async def trigger_fix_airports():
+    """Translate airport names only."""
+    from geo_agent.fixer import fix_airports_batch
+    try:
+        count = await fix_airports_batch()
+        return {"status": "ok", "airports_fixed": count}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @router.post("/trigger/health-check")
 async def trigger_health_check():
     from scheduler.health_check import run_health_check
