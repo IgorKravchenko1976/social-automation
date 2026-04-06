@@ -267,6 +267,17 @@ async def trigger_fix_airports():
         return {"status": "error", "error": str(e)}
 
 
+@router.post("/trigger/airport-process")
+async def trigger_airport_process():
+    """Manually trigger one airport research processing cycle."""
+    from geo_agent.airport_processor import process_airport_queue
+    try:
+        await process_airport_queue()
+        return {"status": "ok", "message": "One airport processing cycle completed"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @router.post("/trigger/health-check")
 async def trigger_health_check():
     from scheduler.health_check import run_health_check

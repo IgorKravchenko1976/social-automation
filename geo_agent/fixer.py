@@ -75,6 +75,7 @@ async def fix_events_batch(mode: str = "translate") -> int:
                     event_id,
                     content_language=content_lang,
                     translations=translations,
+                    activate=True,
                 )
                 if ok:
                     fixed += 1
