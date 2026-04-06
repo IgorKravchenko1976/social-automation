@@ -255,3 +255,100 @@ async def get_queue_status() -> dict:
         )
         resp.raise_for_status()
         return resp.json()
+
+
+# ── Airport research pipeline ──
+
+
+@dataclass
+class AirportTask:
+    airport_id: int
+    iata_code: str
+    name: str
+    city: str
+    country_code: str
+    latitude: float
+    longitude: float
+    priority: float = 0
+
+
+async def fetch_next_airport() -> Optional[AirportTask]:
+    """GET /v1/api/research/next-airport — returns AirportTask or None if empty."""
+    if not is_configured():
+        return None
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(f"{_base()}/v1/api/research/next-airport", headers=_headers())
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("empty"):
+        return None
+
+    return AirportTask(
+        airport_id=data["airportId"],
+        iata_code=data["iataCode"],
+        name=data.get("name", ""),
+        city=data.get("city", ""),
+        country_code=data.get("countryCode", ""),
+        latitude=data.get("latitude", 0),
+        longitude=data.get("longitude", 0),
+        priority=data.get("priority", 0),
+    )
+
+
+async def submit_airport_result(
+    airport_id: int,
+    content: str = "",
+    event_id: int = 0,
+    failed: bool = False,
+) -> bool:
+    """POST /v1/api/research/airport-result — submit research result for an airport."""
+    if not is_configured():
+        return False
+
+    payload = {
+        "airportId": airport_id,
+        "content": content,
+        "eventId": event_id,
+        "failed": failed,
+    }
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/airport-result",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    return data.get("ok", False)
+
+
+async def trigger_build_airport_queue() -> dict:
+    """POST /v1/api/research/build-airport-queue — rebuild daily airport queue."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/build-airport-queue",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_sync_airports() -> dict:
+    """POST /v1/api/research/sync-airports — re-sync airports from AirLabs, remove stale."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/sync-airports",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()

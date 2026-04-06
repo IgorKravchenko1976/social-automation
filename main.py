@@ -84,6 +84,36 @@ def _setup_scheduler() -> None:
                           id="geo_daily_report", replace_existing=True)
         logger.info("[geo] Daily research report at 21:00")
 
+        # Airport research pipeline (separate from geo research)
+        from geo_agent.airport_processor import process_airport_queue
+        scheduler.add_job(process_airport_queue, "interval", minutes=2,
+                          id="airport_research_queue", replace_existing=True)
+        logger.info("[airports] Airport research queue enabled — every 2 min")
+
+        from geo_agent.backend_client import trigger_build_airport_queue, trigger_sync_airports
+
+        async def _daily_build_airport_queue():
+            try:
+                result = await trigger_build_airport_queue()
+                logger.info("[airports] Daily airport queue rebuild: %s", result)
+            except Exception as exc:
+                logger.warning("[airports] Daily airport queue rebuild failed: %s", exc)
+
+        scheduler.add_job(_daily_build_airport_queue, CronTrigger(hour=6, minute=5, timezone=tz),
+                          id="airport_build_queue_daily", replace_existing=True)
+        logger.info("[airports] Daily airport queue rebuild at 06:05")
+
+        async def _weekly_sync_airports():
+            try:
+                result = await trigger_sync_airports()
+                logger.info("[airports] Weekly sync: %s", result)
+            except Exception as exc:
+                logger.warning("[airports] Weekly sync failed: %s", exc)
+
+        scheduler.add_job(_weekly_sync_airports, CronTrigger(day_of_week="mon", hour=4, minute=0, timezone=tz),
+                          id="airport_weekly_sync", replace_existing=True)
+        logger.info("[airports] Weekly airport sync every Monday at 04:00")
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 
