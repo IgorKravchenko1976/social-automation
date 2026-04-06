@@ -14,12 +14,13 @@ import asyncio
 import logging
 
 from geo_agent import backend_client
-from geo_agent.translator import translate_content, translate_name
+from geo_agent.translator import translate_content, translate_name, translate_research_content
 
 logger = logging.getLogger(__name__)
 
 EVENTS_PER_CYCLE = 5
 AIRPORTS_PER_CYCLE = 20
+RESEARCH_PER_CYCLE = 5
 _lock = asyncio.Lock()
 
 
@@ -136,14 +137,82 @@ async def fix_airports_batch() -> int:
     return fixed
 
 
+async def fix_research_batch() -> int:
+    """Translate up to RESEARCH_PER_CYCLE geo_research records.
+
+    Returns the number of records successfully fixed.
+    """
+    if not backend_client.is_configured():
+        return 0
+
+    fixed = 0
+    for _ in range(RESEARCH_PER_CYCLE):
+        try:
+            item = await backend_client.next_fix_research()
+        except Exception as exc:
+            logger.warning("[fixer] Failed to fetch next fix research: %s", exc)
+            break
+
+        if item is None:
+            logger.info("[fixer] No more research needing translations")
+            break
+
+        research_id = item["id"]
+        summary = item.get("summary", "")
+        content = item.get("content", "")
+        content_lang = item.get("contentLanguage", "")
+
+        if not content_lang:
+            content_lang = _detect_source_lang(summary, content)
+
+        logger.info(
+            "[fixer] Processing research %d (lang=%s): %s",
+            research_id, content_lang, summary[:60],
+        )
+
+        try:
+            translations = await translate_research_content(
+                summary, content, source_lang=content_lang,
+            )
+        except Exception as exc:
+            logger.warning("[fixer] Research translation failed for %d: %s", research_id, exc)
+            continue
+
+        if len(translations) < 2:
+            logger.warning("[fixer] Too few translations for research %d: %d", research_id, len(translations))
+            continue
+
+        try:
+            ok = await backend_client.submit_fix_research(
+                research_id,
+                content_language=content_lang,
+                translations=translations,
+            )
+            if ok:
+                fixed += 1
+                logger.info("[fixer] Fixed research %d (%d languages)", research_id, len(translations))
+            else:
+                logger.warning("[fixer] Backend rejected fix for research %d", research_id)
+        except Exception as exc:
+            logger.warning("[fixer] Submit failed for research %d: %s", research_id, exc)
+
+    logger.info("[fixer] Research batch done: fixed=%d", fixed)
+    return fixed
+
+
 async def run_fix_cycle() -> dict:
-    """Run one full fix cycle: events + airports.
+    """Run one full fix cycle: events + airports + research.
 
     Called by scheduler on a regular interval.
     """
     events_fixed = await fix_events_batch(mode="translate")
     airports_fixed = await fix_airports_batch()
-    return {"events_fixed": events_fixed, "airports_fixed": airports_fixed}
+    research_fixed = await fix_research_batch()
+    return {
+        "events_fixed": events_fixed,
+        "airports_fixed": airports_fixed,
+        "research_fixed": research_fixed,
+    }
 
 
 def _detect_source_lang(title: str, description: str) -> str:

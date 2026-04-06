@@ -236,7 +236,7 @@ async def trigger_geo_daily_report():
 
 @router.post("/trigger/fix-cycle")
 async def trigger_fix_cycle():
-    """Manually trigger one fix/translate cycle for events + airports."""
+    """Manually trigger one fix/translate cycle for events + airports + research."""
     from geo_agent.fixer import run_fix_cycle
     try:
         result = await run_fix_cycle()
@@ -263,6 +263,17 @@ async def trigger_fix_airports():
     try:
         count = await fix_airports_batch()
         return {"status": "ok", "airports_fixed": count}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/fix-research")
+async def trigger_fix_research():
+    """Translate existing research content."""
+    from geo_agent.fixer import fix_research_batch
+    try:
+        count = await fix_research_batch()
+        return {"status": "ok", "research_fixed": count}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 

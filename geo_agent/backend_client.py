@@ -82,6 +82,8 @@ async def submit_result(
     no_change: bool = False,
     research_level: str = "location",
     scope_key: str = "",
+    content_language: str = "",
+    translations: dict | None = None,
 ) -> bool:
     """POST /v1/api/research/result — returns True on success."""
     if not is_configured():
@@ -95,6 +97,10 @@ async def submit_result(
         "researchLevel": research_level,
         "scopeKey": scope_key,
     }
+    if content_language:
+        payload["contentLanguage"] = content_language
+    if translations:
+        payload["translations"] = translations
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.post(
@@ -114,6 +120,8 @@ async def submit_level_result(
     content: str,
     summary: str,
     no_change: bool = False,
+    content_language: str = "",
+    translations: dict | None = None,
 ) -> bool:
     """POST /v1/api/research/level-result — submit non-location level research."""
     if not is_configured():
@@ -126,6 +134,10 @@ async def submit_level_result(
         "summary": summary,
         "noChange": no_change,
     }
+    if content_language:
+        payload["contentLanguage"] = content_language
+    if translations:
+        payload["translations"] = translations
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.post(
@@ -468,6 +480,58 @@ async def submit_fix_airport(airport_id: int, name_translations: dict) -> bool:
                 "id": airport_id,
                 "nameTranslations": _json.dumps(name_translations, ensure_ascii=False),
             },
+        )
+        resp.raise_for_status()
+        return resp.json().get("ok", False)
+
+
+async def next_fix_research() -> dict | None:
+    """GET /v1/api/research/fix-research — next research needing translations."""
+    if not is_configured():
+        return None
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/fix-research",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("empty"):
+        return None
+    return data
+
+
+async def submit_fix_research(
+    research_id: int,
+    *,
+    content_language: str = "",
+    translations: dict | None = None,
+    summary: str = "",
+    content: str = "",
+) -> bool:
+    """POST /v1/api/research/fix-research — save translations for research."""
+    if not is_configured():
+        return False
+
+    import json as _json
+
+    payload: dict = {"id": research_id}
+    if content_language:
+        payload["contentLanguage"] = content_language
+    if translations:
+        payload["translations"] = _json.dumps(translations, ensure_ascii=False)  # FixResearch expects string field
+    if summary:
+        payload["summary"] = summary
+    if content:
+        payload["content"] = content
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/fix-research",
+            headers=_headers(),
+            json=payload,
         )
         resp.raise_for_status()
         return resp.json().get("ok", False)

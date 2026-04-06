@@ -19,7 +19,7 @@ from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent.researcher import research_location
 from geo_agent import backend_client
-from geo_agent.translator import translate_content
+from geo_agent.translator import translate_content, translate_research_content
 from content.media import get_image_for_post, cleanup_media_file
 
 logger = logging.getLogger(__name__)
@@ -181,16 +181,26 @@ async def _process_single_level(task: backend_client.NextTask, level: str, scope
 
     content = json.dumps(result, ensure_ascii=False)
     summary = result.get("summary", "")
+
+    source_lang = "uk"
+    try:
+        research_translations = await translate_research_content(summary, content, source_lang=source_lang)
+    except Exception as exc:
+        logger.warning("[geo-processor] Research translation failed for %s: %s", task.research_code, exc)
+        research_translations = {source_lang: {"summary": summary, "content": content}}
+
     await backend_client.submit_result(
         research_code=task.research_code,
         content=content, summary=summary, no_change=False,
         research_level=level, scope_key=scope_key,
+        content_language=source_lang,
+        translations=research_translations,
     )
     await _log_to_local_db(
         task.research_code, task.center_latitude, task.center_longitude,
         result, GeoResearchStatus.COMPLETED,
     )
-    logger.info("[geo-processor] %s level=%s: completed", task.research_code, level)
+    logger.info("[geo-processor] %s level=%s: completed (%d translations)", task.research_code, level, len(research_translations))
 
     if level == "location":
         await _create_event_for_research(task, result)
@@ -215,13 +225,23 @@ async def _process_level_standalone(task: backend_client.NextTask, level: str, s
 
         content = json.dumps(result, ensure_ascii=False)
         summary = result.get("summary", "")
+
+        source_lang = "uk"
+        try:
+            research_translations = await translate_research_content(summary, content, source_lang=source_lang)
+        except Exception as exc:
+            logger.warning("[geo-processor] Level translation failed for %s level=%s: %s", task.cluster_code, level, exc)
+            research_translations = {source_lang: {"summary": summary, "content": content}}
+
         await backend_client.submit_level_result(
             research_level=level,
             scope_key=scope_key,
             content=content,
             summary=summary,
+            content_language=source_lang,
+            translations=research_translations,
         )
-        logger.info("[geo-processor] %s level=%s scope=%s: submitted", task.cluster_code, level, scope_key)
+        logger.info("[geo-processor] %s level=%s scope=%s: submitted (%d translations)", task.cluster_code, level, scope_key, len(research_translations))
 
     except Exception as exc:
         logger.warning("[geo-processor] Level %s for %s failed: %s", level, task.cluster_code, exc)
