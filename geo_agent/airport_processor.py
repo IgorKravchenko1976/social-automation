@@ -24,7 +24,7 @@ from content.media import get_image_for_post, cleanup_media_file
 
 logger = logging.getLogger(__name__)
 
-DAILY_LIMIT = 10
+DAILY_LIMIT = 30
 _lock = asyncio.Lock()
 _AUDIT_PREFIX = "airport:"
 
@@ -84,6 +84,7 @@ async def _process_one_airport() -> bool:
         return False
 
     if task is None:
+        logger.info("[airport-processor] No tasks in queue")
         return False
 
     logger.info(
@@ -231,7 +232,9 @@ async def process_airport_queue() -> None:
             processed = 0
 
         if processed >= DAILY_LIMIT:
-            logger.debug("[airport-processor] Daily limit reached (%d/%d)", processed, DAILY_LIMIT)
+            logger.info("[airport-processor] Daily limit reached (%d/%d)", processed, DAILY_LIMIT)
             return
+
+        logger.info("[airport-processor] Cycle start (%d/%d processed)", processed, DAILY_LIMIT)
 
         await _process_one_airport()
