@@ -1,8 +1,10 @@
-"""AI-powered airport researcher with Wikipedia verification.
+"""AI-powered transport hub researcher with Wikipedia verification.
 
-The airport is already a known, concrete POI — no need to discover it.
+Supports airports and railway stations. Each facility type gets its own
+AI prompt and image query. Content is generated in Ukrainian.
+
 Flow:
-  1. Search Wikipedia for the airport article
+  1. Search Wikipedia for the facility article
   2. Nominatim reverse geocoding for address confirmation
   3. AI generates traveler-focused description using verified data
   4. Returns title + description for event creation
@@ -22,71 +24,100 @@ logger = logging.getLogger(__name__)
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 WIKIPEDIA_SEARCH = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 WIKIPEDIA_SEARCH_API = "https://en.wikipedia.org/w/api.php"
-HTTP_HEADERS = {"User-Agent": "ImInApp/1.0 (airport research bot; igork2011@gmail.com)"}
+WIKI_UK_SEARCH_API = "https://uk.wikipedia.org/w/api.php"
+WIKI_UK_SUMMARY = "https://uk.wikipedia.org/api/rest_v1/page/summary/{title}"
+HTTP_HEADERS = {"User-Agent": "ImInApp/1.0 (transport research bot; igork2011@gmail.com)"}
 
 
-AIRPORT_PROMPT = """You are a travel expert writing about airports for travelers.
-You receive VERIFIED data about an airport from real sources (Wikipedia, maps).
-Write a traveler-focused description using ONLY the provided data.
+AIRPORT_PROMPT = """Ти — експерт з подорожей, який пише про аеропорти для мандрівників.
+Ти отримуєш ПЕРЕВІРЕНІ дані про аеропорт з реальних джерел (Вікіпедія, карти).
+Напиши опис для мандрівників, використовуючи ТІЛЬКИ надані дані.
 
-Return JSON:
+Поверни JSON:
 {
-  "title": "Official airport name (from provided data)",
-  "description": "Traveler-focused description: location, transport to city center, facilities, interesting facts. 2-3 paragraphs.",
-  "city_info": "Brief info about the city this airport serves.",
-  "transport": "How to get from airport to city center (if known from data).",
-  "facts": ["Interesting fact 1", "Interesting fact 2"]
+  "title": "Офіційна назва аеропорту (з наданих даних)",
+  "description": "Опис для мандрівників: розташування, транспорт до центру міста, зручності, цікаві факти. 2-3 абзаци.",
+  "city_info": "Коротка інформація про місто, яке обслуговує аеропорт.",
+  "transport": "Як дістатися з аеропорту до центру міста (якщо відомо з даних).",
+  "facts": ["Цікавий факт 1", "Цікавий факт 2"]
 }
 
-CRITICAL:
-1. Use ONLY the data provided. DO NOT invent additional information.
-2. Write in English.
-3. Focus on practical info for travelers.
-4. Return ONLY JSON."""
+КРИТИЧНО:
+1. Використовуй ТІЛЬКИ надані дані. НЕ вигадуй додаткову інформацію.
+2. Пиши УКРАЇНСЬКОЮ мовою.
+3. Фокусуйся на практичній інформації для мандрівників.
+4. Повертай ТІЛЬКИ JSON."""
 
 
-async def _wikipedia_airport(name: str, iata: str) -> dict | None:
-    """Search Wikipedia for an airport article."""
-    queries = [
-        f"{name}",
-        f"{iata} airport",
-        f"{name} airport",
-    ]
+RAILWAY_PROMPT = """Ти — експерт з подорожей, який пише про залізничні вокзали для мандрівників.
+Ти отримуєш ПЕРЕВІРЕНІ дані про вокзал з реальних джерел (Вікіпедія, карти).
+Напиши опис для мандрівників, використовуючи ТІЛЬКИ надані дані.
 
-    for query in queries:
-        try:
-            async with httpx.AsyncClient(timeout=10, headers=HTTP_HEADERS) as http:
-                resp = await http.get(WIKIPEDIA_SEARCH_API, params={
-                    "action": "query",
-                    "list": "search",
-                    "srsearch": query,
-                    "format": "json",
-                    "srlimit": 3,
-                })
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
+Поверни JSON:
+{
+  "title": "Офіційна назва вокзалу (з наданих даних)",
+  "description": "Опис для мандрівників: розташування, маршрути, зручності, архітектура, цікаві факти. 2-3 абзаци.",
+  "city_info": "Коротка інформація про місто, де знаходиться вокзал.",
+  "transport": "Основні напрямки поїздів та з'єднання з іншим транспортом.",
+  "facts": ["Цікавий факт 1", "Цікавий факт 2"]
+}
 
-            results = data.get("query", {}).get("search", [])
-            for result in results:
-                title = result.get("title", "")
-                lower_title = title.lower()
-                if "airport" in lower_title or iata.lower() in lower_title:
-                    summary = await _fetch_wiki_summary(title)
-                    if summary:
-                        return summary
-                    break
+КРИТИЧНО:
+1. Використовуй ТІЛЬКИ надані дані. НЕ вигадуй додаткову інформацію.
+2. Пиши УКРАЇНСЬКОЮ мовою.
+3. Фокусуйся на практичній інформації для мандрівників.
+4. Повертай ТІЛЬКИ JSON."""
 
-        except Exception:
-            logger.warning("[airport-researcher] Wikipedia search failed for: %s", query)
-            continue
+
+_WIKI_KEYWORDS = {
+    "airport": ["airport", "aerodrome", "aeroport"],
+    "railway": ["railway", "station", "gare", "bahnhof", "stazione", "rail"],
+}
+
+
+async def _wikipedia_search(name: str, code: str, facility_type: str = "airport") -> dict | None:
+    """Search Wikipedia for a facility article (tries EN then UK)."""
+    keywords = _WIKI_KEYWORDS.get(facility_type, _WIKI_KEYWORDS["airport"])
+    queries = [name, f"{code} {facility_type}", f"{name} {facility_type}"]
+
+    for wiki_api, summary_tpl in [
+        (WIKIPEDIA_SEARCH_API, WIKIPEDIA_SEARCH),
+        (WIKI_UK_SEARCH_API, WIKI_UK_SUMMARY),
+    ]:
+        for query in queries:
+            try:
+                async with httpx.AsyncClient(timeout=10, headers=HTTP_HEADERS) as http:
+                    resp = await http.get(wiki_api, params={
+                        "action": "query",
+                        "list": "search",
+                        "srsearch": query,
+                        "format": "json",
+                        "srlimit": 3,
+                    })
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+
+                results = data.get("query", {}).get("search", [])
+                for result in results:
+                    title = result.get("title", "")
+                    lower_title = title.lower()
+                    if any(kw in lower_title for kw in keywords) or code.lower() in lower_title:
+                        summary = await _fetch_wiki_summary(title, summary_tpl)
+                        if summary:
+                            return summary
+                        break
+
+            except Exception:
+                logger.warning("[transport-researcher] Wikipedia search failed for: %s", query)
+                continue
 
     return None
 
 
-async def _fetch_wiki_summary(title: str) -> dict | None:
+async def _fetch_wiki_summary(title: str, url_template: str = WIKIPEDIA_SEARCH) -> dict | None:
     """Fetch Wikipedia page summary."""
-    url = WIKIPEDIA_SEARCH.format(title=title.replace(" ", "_"))
+    url = url_template.format(title=title.replace(" ", "_"))
     try:
         async with httpx.AsyncClient(timeout=10, headers=HTTP_HEADERS) as http:
             resp = await http.get(url)
@@ -104,14 +135,14 @@ async def _fetch_wiki_summary(title: str) -> dict | None:
         return None
 
 
-async def _nominatim_airport(lat: float, lng: float) -> dict | None:
-    """Reverse geocode airport location for address context."""
+async def _nominatim_location(lat: float, lng: float) -> dict | None:
+    """Reverse geocode location for address context."""
     try:
         async with httpx.AsyncClient(timeout=10, headers=HTTP_HEADERS) as http:
             resp = await http.get(NOMINATIM_URL, params={
                 "lat": lat, "lon": lng,
                 "format": "json", "addressdetails": 1,
-                "zoom": 14, "accept-language": "en",
+                "zoom": 14, "accept-language": "uk",
             })
             resp.raise_for_status()
             data = resp.json()
@@ -125,7 +156,7 @@ async def _nominatim_airport(lat: float, lng: float) -> dict | None:
             "country_code": (addr.get("country_code") or "").upper(),
         }
     except Exception:
-        logger.warning("[airport-researcher] Nominatim failed for %.4f, %.4f", lat, lng)
+        logger.warning("[transport-researcher] Nominatim failed for %.4f, %.4f", lat, lng)
         return None
 
 
@@ -136,59 +167,66 @@ async def research_airport(
     country_code: str,
     lat: float,
     lng: float,
+    facility_type: str = "airport",
 ) -> Optional[dict]:
-    """Research an airport using Wikipedia + Nominatim + AI.
+    """Research a transport hub using Wikipedia + Nominatim + AI.
+
+    Args:
+        facility_type: 'airport' or 'railway'
 
     Returns dict with title, description, image_query or None on failure.
     """
     client = get_client()
+    is_railway = facility_type == "railway"
+    label = "Залізничний вокзал" if is_railway else "Аеропорт"
 
-    wiki = await _wikipedia_airport(name, iata)
-    nominatim = await _nominatim_airport(lat, lng)
+    wiki = await _wikipedia_search(name, iata, facility_type)
+    nominatim = await _nominatim_location(lat, lng)
 
     context_parts = [
-        f"Airport: {name}",
-        f"IATA code: {iata}",
-        f"City: {city}",
-        f"Country: {country_code}",
-        f"Coordinates: {lat}, {lng}",
+        f"{label}: {name}",
+        f"IATA код: {iata}",
+        f"Місто: {city}",
+        f"Країна: {country_code}",
+        f"Координати: {lat}, {lng}",
     ]
 
     if nominatim:
         if nominatim.get("city"):
-            context_parts.append(f"Nominatim city: {nominatim['city']}")
+            context_parts.append(f"Місто (з карти): {nominatim['city']}")
         if nominatim.get("state"):
-            context_parts.append(f"State/Region: {nominatim['state']}")
+            context_parts.append(f"Регіон: {nominatim['state']}")
         if nominatim.get("country"):
-            context_parts.append(f"Country (verified): {nominatim['country']}")
+            context_parts.append(f"Країна (підтверджена): {nominatim['country']}")
 
     if wiki:
         context_parts.append("")
-        context_parts.append("WIKIPEDIA DATA:")
-        context_parts.append(f"  Title: {wiki.get('title', '')}")
+        context_parts.append("ДАНІ ВІКІПЕДІЇ:")
+        context_parts.append(f"  Заголовок: {wiki.get('title', '')}")
         if wiki.get("description"):
-            context_parts.append(f"  Description: {wiki['description']}")
+            context_parts.append(f"  Опис: {wiki['description']}")
         extract = wiki.get("extract", "")
         if extract:
-            context_parts.append(f"  Article: {extract[:2000]}")
+            context_parts.append(f"  Стаття: {extract[:2000]}")
         if wiki.get("url"):
             context_parts.append(f"  URL: {wiki['url']}")
     else:
         context_parts.append("")
-        context_parts.append("No Wikipedia article found. Use only the basic airport data above.")
+        context_parts.append("Статтю у Вікіпедії не знайдено. Використовуй тільки базові дані вище.")
 
     context_parts.append("")
-    context_parts.append(f"Write a traveler description for {name} ({iata}).")
-    context_parts.append("USE ONLY THE PROVIDED DATA. DO NOT INVENT.")
-    context_parts.append("Return JSON.")
+    context_parts.append(f"Напиши опис для мандрівників про {name} ({iata}). УКРАЇНСЬКОЮ мовою.")
+    context_parts.append("ВИКОРИСТОВУЙ ТІЛЬКИ НАДАНІ ДАНІ. НЕ ВИГАДУЙ.")
+    context_parts.append("Поверни JSON.")
 
     ai_context = "\n".join(context_parts)
+    system_prompt = RAILWAY_PROMPT if is_railway else AIRPORT_PROMPT
 
     try:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": AIRPORT_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": ai_context},
             ],
             max_tokens=2000,
@@ -200,22 +238,27 @@ async def research_airport(
         result = json.loads(raw)
 
         if not result.get("title") or not result.get("description"):
-            logger.warning("[airport-researcher] AI returned empty result for %s", iata)
+            logger.warning("[transport-researcher] AI returned empty result for %s", iata)
             return None
 
         result["iata_code"] = iata
-        result["airport_name"] = name
+        result["facility_name"] = name
+        result["facility_type"] = facility_type
         result["city"] = city
         result["country_code"] = country_code
         result["wikipedia"] = wiki
-        result["image_query"] = f"{name} airport terminal building"
 
-        logger.info("[airport-researcher] Research completed for %s (%s)", name, iata)
+        if is_railway:
+            result["image_query"] = f"{name} railway station building platform"
+        else:
+            result["image_query"] = f"{name} airport terminal building"
+
+        logger.info("[transport-researcher] Research completed for %s (%s) [%s]", name, iata, facility_type)
         return result
 
     except json.JSONDecodeError:
-        logger.exception("[airport-researcher] AI JSON parse failed for %s", iata)
+        logger.exception("[transport-researcher] AI JSON parse failed for %s", iata)
         return None
     except Exception:
-        logger.exception("[airport-researcher] AI research failed for %s", iata)
+        logger.exception("[transport-researcher] AI research failed for %s", iata)
         return None

@@ -191,6 +191,7 @@ async def create_research_event(
     latitude: float,
     longitude: float,
     photo_path: str | None = None,
+    facility_type: str = "",
 ) -> dict:
     """POST /v1/api/research/create-event — create a real event from research."""
     if not is_configured():
@@ -203,6 +204,8 @@ async def create_research_event(
         "latitude": str(latitude),
         "longitude": str(longitude),
     }
+    if facility_type:
+        data["facilityType"] = facility_type
 
     async with httpx.AsyncClient(timeout=60) as client:
         if photo_path:
@@ -270,6 +273,7 @@ class AirportTask:
     latitude: float
     longitude: float
     priority: float = 0
+    facility_type: str = "airport"
 
 
 async def fetch_next_airport() -> Optional[AirportTask]:
@@ -294,6 +298,7 @@ async def fetch_next_airport() -> Optional[AirportTask]:
         latitude=data.get("latitude", 0),
         longitude=data.get("longitude", 0),
         priority=data.get("priority", 0),
+        facility_type=data.get("facilityType", "airport"),
     )
 
 

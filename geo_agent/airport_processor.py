@@ -86,9 +86,9 @@ async def _process_one_airport() -> bool:
         return False
 
     logger.info(
-        "[airport-processor] Task: %s (%s) — %s, %s (%.4f, %.4f)",
+        "[airport-processor] Task: %s (%s) — %s, %s [%s] (%.4f, %.4f)",
         task.name, task.iata_code, task.city, task.country_code,
-        task.latitude, task.longitude,
+        task.facility_type, task.latitude, task.longitude,
     )
 
     try:
@@ -99,6 +99,7 @@ async def _process_one_airport() -> bool:
             country_code=task.country_code,
             lat=task.latitude,
             lng=task.longitude,
+            facility_type=task.facility_type,
         )
 
         if result is None:
@@ -128,6 +129,7 @@ async def _process_one_airport() -> bool:
             latitude=task.latitude,
             longitude=task.longitude,
             photo_path=photo_path,
+            facility_type=task.facility_type,
         )
 
         cleanup_media_file(photo_path)
@@ -169,6 +171,8 @@ async def _process_one_airport() -> bool:
 
 def _build_event_description(result: dict) -> str:
     """Build event description from AI research result."""
+    facility_type = result.get("facility_type", "airport")
+    is_railway = facility_type == "railway"
     parts = []
 
     desc = result.get("description", "")
@@ -181,13 +185,15 @@ def _build_event_description(result: dict) -> str:
 
     transport = result.get("transport", "")
     if transport:
-        parts.append(f"\n🚌 {transport}")
+        emoji = "🚂" if is_railway else "🚌"
+        parts.append(f"\n{emoji} {transport}")
 
     facts = result.get("facts", [])
     if facts and isinstance(facts, list):
         fact_lines = [f"• {f}" for f in facts[:5] if isinstance(f, str)]
         if fact_lines:
-            parts.append("\n✈️ " + "\n".join(fact_lines))
+            header_emoji = "🚆" if is_railway else "✈️"
+            parts.append(f"\n{header_emoji} " + "\n".join(fact_lines))
 
     return "\n".join(parts) if parts else desc
 
