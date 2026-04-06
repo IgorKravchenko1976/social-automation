@@ -58,7 +58,7 @@ async def _log_audit(
     try:
         async with async_session() as session:
             task = GeoResearchTask(
-                request_id=f"airport_{iata}",
+                request_id=f"airport_{iata}_{int(datetime.now(timezone.utc).timestamp())}",
                 latitude=lat,
                 longitude=lng,
                 name=f"{_AUDIT_PREFIX}{iata}",
