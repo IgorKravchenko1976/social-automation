@@ -192,6 +192,8 @@ async def create_research_event(
     longitude: float,
     photo_path: str | None = None,
     facility_type: str = "",
+    content_language: str = "",
+    translations: dict | None = None,
 ) -> dict:
     """POST /v1/api/research/create-event — create a real event from research."""
     if not is_configured():
@@ -206,6 +208,11 @@ async def create_research_event(
     }
     if facility_type:
         data["facilityType"] = facility_type
+    if content_language:
+        data["contentLanguage"] = content_language
+    if translations:
+        import json as _json
+        data["translations"] = _json.dumps(translations, ensure_ascii=False)
 
     async with httpx.AsyncClient(timeout=60) as client:
         if photo_path:
@@ -307,6 +314,7 @@ async def submit_airport_result(
     content: str = "",
     event_id: int = 0,
     failed: bool = False,
+    name_translations: dict | None = None,
 ) -> bool:
     """POST /v1/api/research/airport-result — submit research result for an airport."""
     if not is_configured():
@@ -318,6 +326,9 @@ async def submit_airport_result(
         "eventId": event_id,
         "failed": failed,
     }
+    if name_translations:
+        import json as _json
+        payload["nameTranslations"] = _json.dumps(name_translations, ensure_ascii=False)
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.post(

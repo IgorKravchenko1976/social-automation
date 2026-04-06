@@ -19,6 +19,7 @@ from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent.researcher import research_location
 from geo_agent import backend_client
+from geo_agent.translator import translate_content
 from content.media import get_image_for_post, cleanup_media_file
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,9 @@ async def _create_event_for_research(task: backend_client.NextTask, result: dict
 
         description = "\n\n".join(parts) if parts else summary
 
+        source_lang = "uk"
+        translations = await translate_content(title[:200], description[:4000], source_lang=source_lang)
+
         image_query = f"{location_name} travel landscape" if location_name else "travel landscape beautiful destination"
         photo_path = await get_image_for_post(image_query, use_dalle=True)
         logger.info(
@@ -263,6 +267,8 @@ async def _create_event_for_research(task: backend_client.NextTask, result: dict
             latitude=task.center_latitude,
             longitude=task.center_longitude,
             photo_path=photo_path,
+            content_language=source_lang,
+            translations=translations,
         )
 
         cleanup_media_file(photo_path)

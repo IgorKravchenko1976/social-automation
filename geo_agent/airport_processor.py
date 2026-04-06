@@ -19,6 +19,7 @@ from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent import backend_client
 from geo_agent.airport_researcher import research_airport
+from geo_agent.translator import translate_content, translate_name
 from content.media import get_image_for_post, cleanup_media_file
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,10 @@ async def _process_one_airport() -> bool:
         description = _build_event_description(result)
         image_query = result.get("image_query", f"{task.name} airport")
 
+        source_lang = "uk"
+        translations = await translate_content(title, description, source_lang=source_lang)
+        name_translations = await translate_name(task.name, source_lang="en")
+
         photo_path = await get_image_for_post(image_query, use_dalle=True)
         logger.info(
             "[airport-processor] Image for %s: %s",
@@ -130,6 +135,8 @@ async def _process_one_airport() -> bool:
             longitude=task.longitude,
             photo_path=photo_path,
             facility_type=task.facility_type,
+            content_language=source_lang,
+            translations=translations,
         )
 
         cleanup_media_file(photo_path)
@@ -141,6 +148,7 @@ async def _process_one_airport() -> bool:
             airport_id=task.airport_id,
             content=content_json[:10000],
             event_id=event_id,
+            name_translations=name_translations,
         )
 
         await _log_audit(
