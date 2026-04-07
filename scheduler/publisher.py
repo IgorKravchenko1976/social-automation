@@ -196,7 +196,48 @@ async def _generate_and_verify_text(
 
 
 # ---------------------------------------------------------------------------
-# Single-platform publish
+# Phase 1: Generate text + extract geo (no publishing yet)
+# ---------------------------------------------------------------------------
+
+async def _prepare_publication_text(
+    post: Post,
+    pub: Publication,
+    platform: Platform,
+) -> bool:
+    """Generate text + extract geo for a single publication.
+
+    Returns True if text is ready (or was already set), False if rejected.
+    """
+    if pub.content_adapted:
+        return True
+
+    content_type = _detect_content_type(post)
+    text = await _generate_and_verify_text(post, platform, content_type)
+    if text is None:
+        pub.status = PostStatus.FAILED
+        pub.error_message = "Fact-check rejected all attempts"
+        post.log_pipeline("publish", "fail",
+                          f"{platform.value}: skipped — fact-check rejected text")
+        return False
+
+    pub.content_adapted = text
+
+    limits = PLATFORM_LIMITS.get(platform, {})
+    if limits.get("supports_links") and post.latitude and post.longitude:
+        map_url = build_map_link(post.latitude, post.longitude, post.place_name or "")
+        map_suffix = f"\n\n📍 {post.place_name or 'На карті'}: {map_url}"
+        max_len = limits.get("max_text_length", 4096)
+        if len(pub.content_adapted) + len(map_suffix) > max_len:
+            available = max_len - len(map_suffix) - 3
+            if available >= 80:
+                pub.content_adapted = pub.content_adapted[:available] + "..."
+        pub.content_adapted += map_suffix
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Publish with final image
 # ---------------------------------------------------------------------------
 
 async def _publish_single(
@@ -206,33 +247,11 @@ async def _publish_single(
     platform: Platform,
     image_path: Optional[str],
 ) -> None:
+    if not pub.content_adapted:
+        return
+
     try:
         pub.status = PostStatus.PUBLISHING
-
-        if not pub.content_adapted:
-            content_type = _detect_content_type(post)
-            text = await _generate_and_verify_text(
-                post, platform, content_type,
-            )
-            if text is None:
-                pub.status = PostStatus.FAILED
-                pub.error_message = "Fact-check rejected all attempts"
-                post.log_pipeline("publish", "fail",
-                                  f"{platform.value}: skipped — fact-check rejected text")
-                return
-            pub.content_adapted = text
-
-            limits = PLATFORM_LIMITS.get(platform, {})
-            if limits.get("supports_links") and post.latitude and post.longitude:
-                map_url = build_map_link(post.latitude, post.longitude, post.place_name or "")
-                map_suffix = f"\n\n📍 {post.place_name or 'На карті'}: {map_url}"
-                max_len = limits.get("max_text_length", 4096)
-                if len(pub.content_adapted) + len(map_suffix) > max_len:
-                    available = max_len - len(map_suffix) - 3
-                    if available >= 80:
-                        pub.content_adapted = pub.content_adapted[:available] + "..."
-                pub.content_adapted += map_suffix
-
         adapter = get_platform_instance(platform)
 
         if platform == Platform.TIKTOK:
@@ -371,23 +390,44 @@ async def _try_publish_post(
         )
         publications = pubs_result.scalars().all()
 
+        # ── Phase 1: generate text + extract geo for all platforms ──
+        for pub in publications:
+            platform = Platform(pub.platform)
+            await _prepare_publication_text(post, pub, platform)
+        await session.commit()
+
+        # ── Phase 2: fetch image AFTER text + geo are ready ──
         image_path = post.image_path
         if not image_path:
-            query = post.content_raw[:100] if post.content_raw else (post.title or "travel")
-            place = post.place_name or ""
-            dalle_hint = (
-                f"Photorealistic travel photography: {place + ', ' if place else ''}"
-                f"{query[:120]}. Beautiful scenery, professional travel magazine style, "
-                f"bright daylight."
+            best_text = next(
+                (p.content_adapted for p in publications if p.content_adapted),
+                post.content_raw or post.title or "travel",
             )
+            place = post.place_name or ""
+            country = ""
+            if post.latitude and post.longitude:
+                country = f" ({post.latitude:.1f}, {post.longitude:.1f})"
+            dalle_hint = (
+                f"Photorealistic travel photography of {place}{country}. "
+                f"Context: {best_text[:200]}. "
+                f"Beautiful scenery, professional travel magazine style, bright daylight."
+            )
+            query = f"{place} {best_text[:80]}".strip() or "travel landscape"
             image_path = await get_image_for_post(
                 query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_hint,
             )
             if image_path:
                 post.image_path = image_path
                 await session.commit()
+            logger.info(
+                "=== PUBLISH === Image for post_id=%d place='%s': %s",
+                post.id, place, "found" if image_path else "none",
+            )
 
+        # ── Phase 3: publish with correct image ──
         for pub in publications:
+            if pub.status == PostStatus.FAILED:
+                continue
             platform = Platform(pub.platform)
             await _publish_single(session, post, pub, platform, image_path)
 
