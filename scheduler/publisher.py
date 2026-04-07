@@ -373,7 +373,16 @@ async def _try_publish_post(
 
         image_path = post.image_path
         if not image_path:
-            image_path = await get_image_for_post(post.content_raw[:100])
+            query = post.content_raw[:100] if post.content_raw else (post.title or "travel")
+            place = post.place_name or ""
+            dalle_hint = (
+                f"Photorealistic travel photography: {place + ', ' if place else ''}"
+                f"{query[:120]}. Beautiful scenery, professional travel magazine style, "
+                f"bright daylight."
+            )
+            image_path = await get_image_for_post(
+                query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_hint,
+            )
             if image_path:
                 post.image_path = image_path
                 await session.commit()

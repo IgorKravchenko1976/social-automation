@@ -82,7 +82,9 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
         if not image_path:
             from content.media import get_image_for_post
-            image_path = await get_image_for_post(text[:100])
+            image_path = await get_image_for_post(
+                text[:100], use_dalle=True, prefer_dalle=True,
+            )
             if not image_path:
                 return PublishResult(success=False, error="Instagram requires an image, none available")
 

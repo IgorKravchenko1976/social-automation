@@ -133,7 +133,12 @@ async def trigger_announce_release():
             await session.commit()
             post_id = post.id
 
-        image_path = await get_image_for_post("travel app launch celebration world map adventure")
+        image_path = await get_image_for_post(
+            "travel app launch celebration world map adventure",
+            use_dalle=True, prefer_dalle=True,
+            dalle_prompt="Photorealistic celebration image: travel app launch, world map, "
+                         "colorful markers, adventure vibes. Modern clean design, bright daylight.",
+        )
 
         from config.platforms import Platform
         results = {}
