@@ -92,15 +92,37 @@ async def generate_image_dalle(prompt: str) -> Optional[str]:
         return None
 
 
-async def get_image_for_post(query: str, use_dalle: bool = True) -> Optional[str]:
-    """Get an image for a post: try Pexels first, fallback to DALL-E."""
+async def get_image_for_post(
+    query: str,
+    use_dalle: bool = True,
+    prefer_dalle: bool = False,
+    dalle_prompt: str | None = None,
+) -> Optional[str]:
+    """Get an image for a post.
+
+    prefer_dalle=True → DALL-E first (unique per location), Pexels fallback.
+    prefer_dalle=False → Pexels first (cheaper), DALL-E fallback.
+    dalle_prompt → custom DALL-E prompt instead of auto-generating from query.
+    """
+    if prefer_dalle and settings.openai_api_key:
+        prompt = dalle_prompt
+        if not prompt:
+            from content.generator import generate_image_prompt
+            prompt = await generate_image_prompt(query)
+        path = await generate_image_dalle(prompt)
+        if path:
+            return path
+        logger.info("[media] DALL-E failed, falling back to Pexels for: %s", query[:60])
+
     path = await download_image_pexels(query)
     if path:
         return path
 
-    if use_dalle and settings.openai_api_key:
-        from content.generator import generate_image_prompt
-        prompt = await generate_image_prompt(query)
+    if not prefer_dalle and use_dalle and settings.openai_api_key:
+        prompt = dalle_prompt
+        if not prompt:
+            from content.generator import generate_image_prompt
+            prompt = await generate_image_prompt(query)
         return await generate_image_dalle(prompt)
 
     return None

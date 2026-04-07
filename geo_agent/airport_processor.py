@@ -120,9 +120,12 @@ async def _process_one_airport() -> bool:
         translations = await translate_content(title, description, source_lang=source_lang)
         name_translations = await translate_name(task.name, source_lang="en")
 
-        photo_path = await get_image_for_post(image_query, use_dalle=True)
+        dalle_prompt = _build_dalle_prompt(task, result)
+        photo_path = await get_image_for_post(
+            image_query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_prompt,
+        )
         logger.info(
-            "[airport-processor] Image for %s: %s",
+            "[airport-processor] Image for %s: %s (dalle-first)",
             task.iata_code, "found" if photo_path else "none",
         )
 
@@ -177,6 +180,56 @@ async def _process_one_airport() -> bool:
             None, GeoResearchStatus.FAILED, str(exc)[:1000],
         )
         return False
+
+
+_DALLE_PROMPT_TEMPLATES = {
+    "airport": (
+        "Photorealistic aerial view of {name} airport in {city}, {country}. "
+        "Modern terminal building, runways, surrounding landscape typical for {country}. "
+        "Bright daylight, professional travel photography style."
+    ),
+    "aerodrome": (
+        "Photorealistic view of {name} aerodrome near {city}, {country}. "
+        "Small airfield with light aircraft, hangars, local landscape. "
+        "Bright daylight, professional travel photography style."
+    ),
+    "railway": (
+        "Photorealistic view of {name} railway station in {city}, {country}. "
+        "Station building, platforms, trains, architectural details typical for the region. "
+        "Bright daylight, professional travel photography style."
+    ),
+    "heliport": (
+        "Photorealistic view of {name} heliport near {city}, {country}. "
+        "Helipad, helicopter, surrounding area. "
+        "Bright daylight, professional travel photography style."
+    ),
+    "military": (
+        "Photorealistic view of {name} air base area near {city}, {country}. "
+        "Aviation facility, historical significance, surrounding landscape. "
+        "Bright daylight, professional aerial photography style."
+    ),
+    "bus": (
+        "Photorealistic view of {name} bus station in {city}, {country}. "
+        "Bus terminal building, platforms, local architecture and landscape. "
+        "Bright daylight, professional travel photography style."
+    ),
+}
+
+
+def _build_dalle_prompt(task, result: dict) -> str:
+    """Build a location-specific DALL-E prompt for unique image generation."""
+    ft = task.facility_type or "airport"
+    template = _DALLE_PROMPT_TEMPLATES.get(ft, _DALLE_PROMPT_TEMPLATES["airport"])
+
+    name = task.name or result.get("title", "Transport hub")
+    city = task.city or result.get("city", "")
+    country_label = task.country_code or ""
+
+    prompt = template.format(name=name, city=city, country=country_label)
+    if len(prompt) > 950:
+        prompt = prompt[:950]
+
+    return prompt
 
 
 _FACILITY_EMOJIS = {
