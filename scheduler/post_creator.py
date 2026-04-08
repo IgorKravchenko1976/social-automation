@@ -1,4 +1,4 @@
-"""Post creation: daily batch and single-post generation from RSS/AI."""
+"""Post creation: daily batch and single-post generation from POI data / RSS / AI."""
 from __future__ import annotations
 
 import json as _json
@@ -20,6 +20,7 @@ from content.tourism_topics import (
     ACTIVE_DIRECTIONS, LEISURE_DIRECTIONS, FEATURE_DIRECTIONS,
 )
 from content.rss_parser import fetch_feed
+from content.poi_client import fetch_next_poi, mark_poi_posted, format_poi_for_ai
 from db.database import async_session
 from db.models import Post, Publication
 
@@ -27,7 +28,13 @@ logger = logging.getLogger(__name__)
 
 ALL_PLATFORMS = configured_platforms()
 
-SLOT_CONTENT_TYPES = ["tourism_news", "active_travel", "leisure_travel", "tourism_news", "feature"]
+SLOT_CONTENT_TYPES = [
+    "poi_spotlight",    # 08:00
+    "poi_spotlight",    # 10:00
+    "poi_spotlight",    # 12:00
+    "poi_spotlight",    # 15:00
+    "poi_spotlight",    # 18:00
+]
 
 MAX_TERRITORY_RETRIES = 3
 
@@ -137,11 +144,10 @@ async def _fetch_tourism_news(session: AsyncSession, count: int = 2) -> list[dic
 # ---------------------------------------------------------------------------
 
 async def create_daily_posts() -> None:
-    """Generate 5 posts for today:
-    - 2 tourism news (from RSS, priority Ukraine; fallback = leisure travel)
-    - 1 active sports/events (tied to location)
-    - 1 leisure travel (places, culture, gastro)
-    - 1 app feature (tied to one of today's travel topics)
+    """Generate 5 posts for today — all from enriched POI database.
+
+    Fallback chain: poi_spotlight → leisure_travel (AI) if no POI available.
+    Each post features a real, verified place with CTA to download the app.
     """
     logger.info("=== CREATE POSTS === Starting daily post creation for %d platforms: %s",
                 len(ALL_PLATFORMS), [p.value for p in ALL_PLATFORMS])
@@ -152,90 +158,78 @@ async def create_daily_posts() -> None:
     async with async_session() as session:
         created_posts: list[tuple[Post, str]] = []
         recent_titles = await _get_recent_titles(session, days=60)
-        today_travel_topics: list[str] = []
 
-        news_entries = await _fetch_tourism_news(session, count=2)
-        logger.info("=== CREATE POSTS === RSS entries found: %d", len(news_entries))
-        for entry in news_entries:
-            source_name = entry.get("source_name", "")
-            pub_date = entry.get("published")
-            date_str = pub_date.strftime("%d.%m.%Y") if pub_date else ""
-            date_line = f"Дата публікації: {date_str}\n" if date_str else ""
-            content = (
-                f"{date_line}"
-                f"{entry['title']}\n\n"
-                f"{entry.get('summary', '')}\n\n"
-                f"Джерело: {source_name}\n{entry['link']}"
-            )
-            post = Post(
-                title=entry["title"][:200],
-                content_raw=content,
-                source="rss",
-                source_url=entry["link"],
-                source_published_at=pub_date,
-            )
-            post.log_pipeline("topic", "ok", f"RSS: {source_name} — {entry['title'][:120]}")
-            session.add(post)
-            await session.flush()
-            for platform in ALL_PLATFORMS:
-                session.add(Publication(post_id=post.id, platform=platform.value))
-            created_posts.append((post, "tourism_news"))
-            today_travel_topics.append(entry["title"][:200])
+        for slot_idx, content_type in enumerate(SLOT_CONTENT_TYPES):
+            logger.info("=== CREATE POSTS === Slot %d: type=%s", slot_idx, content_type)
 
-        while len([p for p in created_posts if p[1] in ("tourism_news", "leisure_travel")]) < 2:
-            leisure_topic = await _pick_unique_topic(
-                session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles,
-            )
-            post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
-            post.log_pipeline("topic", "ok", f"AI leisure (RSS fill-in): {leisure_topic[:120]}")
-            session.add(post)
-            await session.flush()
-            for platform in ALL_PLATFORMS:
-                session.add(Publication(post_id=post.id, platform=platform.value))
-            created_posts.append((post, "leisure_travel"))
-            recent_titles.append(leisure_topic)
-            today_travel_topics.append(leisure_topic[:200])
+            if content_type == "poi_spotlight":
+                post = await _create_poi_spotlight_post(session)
+                if post:
+                    created_posts.append((post, "poi_spotlight"))
+                    recent_titles.append(post.title or "")
+                    continue
 
-        active_topic = await _pick_unique_topic(
-            session, ACTIVE_DIRECTIONS, "active_travel", recent_titles,
-        )
-        post = Post(title=active_topic[:200], content_raw=active_topic, source="ai")
-        post.log_pipeline("topic", "ok", f"AI active_travel: {active_topic[:120]}")
-        session.add(post)
-        await session.flush()
-        for platform in ALL_PLATFORMS:
-            session.add(Publication(post_id=post.id, platform=platform.value))
-        created_posts.append((post, "active_travel"))
-        recent_titles.append(active_topic)
-        today_travel_topics.append(active_topic[:200])
+                logger.info("=== CREATE POSTS === Slot %d: no POI, fallback to leisure_travel", slot_idx)
+                content_type = "leisure_travel"
 
-        leisure_topic = await _pick_unique_topic(
-            session, LEISURE_DIRECTIONS, "leisure_travel", recent_titles,
-        )
-        post = Post(title=leisure_topic[:200], content_raw=leisure_topic, source="ai")
-        post.log_pipeline("topic", "ok", f"AI leisure_travel: {leisure_topic[:120]}")
-        session.add(post)
-        await session.flush()
-        for platform in ALL_PLATFORMS:
-            session.add(Publication(post_id=post.id, platform=platform.value))
-        created_posts.append((post, "leisure_travel"))
-        recent_titles.append(leisure_topic)
-        today_travel_topics.append(leisure_topic[:200])
+            if content_type == "tourism_news":
+                entries = await _fetch_tourism_news(session, count=1)
+                if entries:
+                    entry = entries[0]
+                    source_name = entry.get("source_name", "")
+                    pub_date = entry.get("published")
+                    date_str = pub_date.strftime("%d.%m.%Y") if pub_date else ""
+                    date_line = f"Дата публікації: {date_str}\n" if date_str else ""
+                    content = (
+                        f"{date_line}"
+                        f"{entry['title']}\n\n"
+                        f"{entry.get('summary', '')}\n\n"
+                        f"Джерело: {source_name}\n{entry['link']}"
+                    )
+                    post = Post(
+                        title=entry["title"][:200],
+                        content_raw=content,
+                        source="rss",
+                        source_url=entry["link"],
+                        source_published_at=pub_date,
+                    )
+                    post.log_pipeline("topic", "ok", f"RSS: {source_name} — {entry['title'][:120]}")
+                    session.add(post)
+                    await session.flush()
+                    for platform in ALL_PLATFORMS:
+                        session.add(Publication(post_id=post.id, platform=platform.value))
+                    created_posts.append((post, "tourism_news"))
+                    recent_titles.append(entry["title"][:200])
+                    continue
+                content_type = "leisure_travel"
 
-        travel_context = random.choice(today_travel_topics) if today_travel_topics else ""
-        feature_topic = await _pick_feature_topic(
-            session, FEATURE_DIRECTIONS, recent_titles, travel_context,
-        )
-        post = Post(title=feature_topic[:200], content_raw=feature_topic, source="ai")
-        post.log_pipeline("topic", "ok", f"AI feature: {feature_topic[:120]}")
-        session.add(post)
-        await session.flush()
-        for platform in ALL_PLATFORMS:
-            session.add(Publication(post_id=post.id, platform=platform.value))
-        created_posts.append((post, "feature"))
-        recent_titles.append(feature_topic)
+            if content_type in ("active_travel", "leisure_travel"):
+                directions = ACTIVE_DIRECTIONS if content_type == "active_travel" else LEISURE_DIRECTIONS
+                topic = await _pick_unique_topic(session, directions, content_type, recent_titles)
+                post = Post(title=topic[:200], content_raw=topic, source="ai")
+                post.log_pipeline("topic", "ok", f"AI {content_type}: {topic[:120]}")
+                session.add(post)
+                await session.flush()
+                for platform in ALL_PLATFORMS:
+                    session.add(Publication(post_id=post.id, platform=platform.value))
+                created_posts.append((post, content_type))
+                recent_titles.append(topic)
+
+            elif content_type == "feature":
+                travel_context = random.choice(recent_titles[-5:]) if recent_titles else ""
+                topic = await _pick_feature_topic(session, FEATURE_DIRECTIONS, recent_titles, travel_context)
+                post = Post(title=topic[:200], content_raw=topic, source="ai")
+                post.log_pipeline("topic", "ok", f"AI feature: {topic[:120]}")
+                session.add(post)
+                await session.flush()
+                for platform in ALL_PLATFORMS:
+                    session.add(Publication(post_id=post.id, platform=platform.value))
+                created_posts.append((post, "feature"))
+                recent_titles.append(topic)
 
         for post_obj, ctype in created_posts:
+            if ctype == "poi_spotlight":
+                continue
             try:
                 tr = await translate_post(
                     post_obj.title or "", post_obj.content_raw or "",
@@ -263,11 +257,71 @@ async def create_daily_posts() -> None:
             )
 
 
+async def _create_poi_spotlight_post(session: AsyncSession) -> Optional[Post]:
+    """Create a post from the richest available POI in our database."""
+    poi = await fetch_next_poi()
+    if not poi:
+        logger.warning("=== FRESH === No POI available, falling back to leisure_travel")
+        return None
+
+    poi_text = format_poi_for_ai(poi)
+    title = f"{poi.get('name', '')} — {poi.get('city', '')}".strip(" —")
+
+    post = Post(
+        title=title[:200],
+        content_raw=poi_text,
+        source="poi",
+        source_url=poi.get("wikipediaUrl") or poi.get("website") or "",
+        latitude=poi.get("latitude"),
+        longitude=poi.get("longitude"),
+        place_name=poi.get("name", "")[:500],
+    )
+    post.log_pipeline("topic", "ok",
+                      f"POI #{poi.get('id')}: {poi.get('name', '')[:80]} ({poi.get('city', '')})")
+
+    session.add(post)
+    await session.flush()
+
+    for platform in ALL_PLATFORMS:
+        session.add(Publication(post_id=post.id, platform=platform.value))
+
+    try:
+        tr = await translate_post(title, poi_text[:1000])
+        if tr:
+            post.translations = _json.dumps(tr, ensure_ascii=False)
+            post.log_pipeline("translate", "ok", f"{len(tr)} languages")
+    except Exception as e:
+        logger.warning("Translation failed for POI post: %s", e)
+        post.log_pipeline("translate", "fail", str(e)[:200])
+
+    point_id = poi.get("id")
+    if point_id:
+        await mark_poi_posted(point_id)
+        post.log_pipeline("poi_mark", "ok", f"Point {point_id} marked as posted")
+
+    # Store POI image URL in post for later use by publisher
+    if poi.get("imageUrl"):
+        post.source_url = poi.get("imageUrl")
+
+    await session.commit()
+    logger.info("=== FRESH === POI post created: post_id=%d title='%s'",
+                post.id, title[:50])
+    return post
+
+
 async def create_single_post(content_type: str) -> Optional[Post]:
     """Create ONE fresh post of the given type. Returns the Post or None."""
     logger.info("=== FRESH === Creating single post type=%s", content_type)
 
     async with async_session() as session:
+        # POI spotlight: fetch from our enriched database
+        if content_type == "poi_spotlight":
+            post = await _create_poi_spotlight_post(session)
+            if post:
+                return post
+            logger.info("=== FRESH === POI unavailable, falling back to leisure_travel")
+            content_type = "leisure_travel"
+
         recent_titles = await _get_recent_titles(session, days=60)
         post: Optional[Post] = None
 

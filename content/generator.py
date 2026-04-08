@@ -58,7 +58,7 @@ async def generate_post_text(
 ) -> str:
     """Generate a platform-adapted post text using OpenAI.
 
-    content_type: feature | tourism_news | active_travel | leisure_travel
+    content_type: feature | tourism_news | active_travel | leisure_travel | poi_spotlight
     """
     client = get_client()
     limits = PLATFORM_LIMITS[platform]
@@ -69,8 +69,12 @@ async def generate_post_text(
     if not limits["supports_links"]:
         user_prompt_parts.append("Do NOT include links (platform does not support clickable links).")
 
-    if source_text:
+    if content_type == "poi_spotlight" and source_text:
+        user_prompt_parts.append(f"\n{source_text[:3000]}")
+        user_prompt_parts.append("\nСтвори красивий пост про це місце. Використовуй ТІЛЬКИ надані дані.")
+    elif source_text:
         user_prompt_parts.append(f"\nSource material to rewrite:\n{source_text[:2000]}")
+
     if topic:
         user_prompt_parts.append(f"\nTopic to write about:\n{topic}")
 

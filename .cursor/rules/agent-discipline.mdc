@@ -1,0 +1,100 @@
+---
+description: Agent discipline — mandatory workflow for every agent session
+alwaysApply: true
+---
+
+# Agent Discipline Protocol
+
+## WHY this rule exists
+
+Every new agent rewrites code its own way, breaking working functionality.
+This causes expensive rework — hours lost re-fixing what already worked.
+This rule prevents that by enforcing a strict read-first, ask-before-changing workflow.
+
+## MANDATORY workflow — every session, every task
+
+### Step 1: Read rules FIRST
+
+Before writing any code, read the relevant `.cursor/rules/*.mdc` files:
+- Always start with `project-overview.mdc` (full system reference)
+- They contain accumulated knowledge from all previous agents
+
+### Step 2: Understand existing code
+
+Before modifying any file:
+1. **Read the file** you're about to change — understand its current logic
+2. **Search for callers** — who imports/calls this function?
+3. **Identify side effects** — what will break if you change this?
+4. **Check scheduler** — does this code run on a schedule? What triggers it?
+
+### Step 3: Explain impact BEFORE changing
+
+Tell the user **before** editing:
+- What exactly you plan to change
+- What other files/features this will affect
+- What could break (especially: scheduled jobs, platform API calls, token management)
+- Your reasoning for the approach
+
+**The user decides** whether to proceed. Do NOT silently rewrite working code.
+
+### Step 4: Minimal changes only
+
+- **Do NOT refactor** code that works unless explicitly asked
+- **Do NOT rewrite** a function/class just because you'd write it differently
+- **Do NOT move code** between files unless there's a concrete reason
+- **Do NOT change** variable names, DB schema, or API contracts of working code
+- **Change ONLY** what is needed for the task — surgical precision
+- **NEVER touch** `.env` — only `.env.example`
+
+### Step 5: Update rules after changes
+
+If your work reveals new patterns, constraints, or gotchas:
+1. **Update the relevant `.mdc` rule file** — add the new knowledge
+2. **Be specific** — add exact file paths, function names, API endpoints, env vars
+3. **Explain the "why"** — future agents need context, not just facts
+4. **Keep rules concise** — bullet points, not essays
+
+## HARD RULES — violations waste the user's time and money
+
+### NEVER do these without explicit user approval:
+- Rewrite working platform adapters (telegram.py, facebook.py, instagram.py)
+- Change scheduled job timing or logic
+- Modify token renewal flow
+- Change DB schema (SQLAlchemy models)
+- Alter content generation prompts
+- Swap libraries or approaches
+- Restructure file organization
+
+### ALWAYS do these:
+- Preserve existing code style and patterns in each file
+- Match naming conventions already used in the codebase
+- Keep async patterns consistent (httpx, aiosqlite)
+- Test changes don't break the scheduler
+- Check Railway deployment compatibility (Docker, /data volume)
+
+## Rule maintenance — living documentation
+
+Rules are **living documents**, not static. Every agent should:
+
+1. **Read rules at session start** — they contain accumulated knowledge from all previous agents
+2. **Add discoveries** — if you find an undocumented platform API behavior, rate limit, or gotcha, add it
+3. **Fix outdated rules** — if a rule contradicts current code, update the rule
+4. **Add new rules** when a significant new feature/pattern is established
+5. **Be precise** — include file paths, function names, env var names
+
+## Impact analysis template
+
+When proposing changes, use this format:
+
+```
+🔍 ЗМІНИ:
+- [file] → [what changes]
+
+⚡ ВПЛИВ:
+- [what other files/features are affected]
+- [what scheduled jobs are affected]
+- [what platform APIs are affected]
+
+✅ БЕЗПЕЧНО:
+- [why this won't break existing functionality]
+```

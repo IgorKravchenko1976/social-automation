@@ -36,6 +36,8 @@ _publish_lock = asyncio.Lock()
 
 def _detect_content_type(post: Post) -> str:
     """Determine content type from post title/content for correct AI prompt."""
+    if post.source == "poi":
+        return "poi_spotlight"
     if post.source == "rss":
         return "tourism_news"
     title = (post.title or "").lower()
