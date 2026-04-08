@@ -129,6 +129,20 @@ async def _generate_and_verify_text(
                     source_text=source_text,
                     content_type="tourism_news",
                 )
+            elif post.source == "poi":
+                source_text = post.content_raw
+                if attempt > 0:
+                    source_text += (
+                        "\n\nУВАГА РЕДАКТОРА: попередня версія відхилена. "
+                        f"Проблема: {last_suggestion}\n"
+                        "Перепиши ТІЛЬКИ на основі наданих даних, НЕ додавай нічого від себе."
+                        f"{territory_hint}"
+                    )
+                text = await generate_post_text(
+                    topic="", platform=platform,
+                    source_text=source_text,
+                    content_type="poi_spotlight",
+                )
             else:
                 topic = post.content_raw
                 if attempt > 0:
