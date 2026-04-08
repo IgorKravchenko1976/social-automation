@@ -49,6 +49,7 @@ class Post(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     place_name = Column(String(500), nullable=True)
+    poi_point_id = Column(Integer, nullable=True)  # map_points.id from backend DB
     source_published_at = Column(DateTime, nullable=True)  # date the original source published the article
     translations = Column(Text, nullable=True)  # JSON: {"en": {"title":"...","content":"..."}, ...}
     pipeline_log = Column(Text, nullable=True)  # JSON array of pipeline stage entries

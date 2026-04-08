@@ -275,6 +275,7 @@ async def _create_poi_spotlight_post(session: AsyncSession) -> Optional[Post]:
         latitude=poi.get("latitude"),
         longitude=poi.get("longitude"),
         place_name=poi.get("name", "")[:500],
+        poi_point_id=poi.get("id"),
     )
     post.log_pipeline("topic", "ok",
                       f"POI #{poi.get('id')}: {poi.get('name', '')[:80]} ({poi.get('city', '')})")
