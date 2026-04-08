@@ -120,6 +120,12 @@ def _setup_scheduler() -> None:
                           id="fix_translate_cycle", replace_existing=True)
         logger.info("[fixer] Fix/translate cycle enabled — every 3 min")
 
+        # POI research pipeline — deep research for enriched POI points
+        from geo_agent.poi_researcher import process_poi_research
+        scheduler.add_job(process_poi_research, "interval", minutes=5,
+                          id="poi_research_queue", replace_existing=True)
+        logger.info("[poi-researcher] POI research queue enabled — every 5 min")
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 

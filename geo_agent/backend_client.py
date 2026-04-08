@@ -279,6 +279,85 @@ async def get_queue_status() -> dict:
         return resp.json()
 
 
+# ── POI research pipeline ──
+
+
+@dataclass
+class POIResearchTask:
+    point_id: int
+    name: str
+    point_type: str
+    city: str
+    country_code: str
+    latitude: float
+    longitude: float
+    description: str = ""
+    image_url: str = ""
+    wikipedia_url: str = ""
+    opening_hours: str = ""
+    phone: str = ""
+    website: str = ""
+    address: str = ""
+    cuisine: str = ""
+    operator_name: str = ""
+    founded_year: int = 0
+    rating: float = 0
+
+
+async def fetch_next_poi_for_research() -> Optional[POIResearchTask]:
+    """GET /v1/api/research/next-poi-for-research — returns enriched POI or None."""
+    if not is_configured():
+        return None
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/next-poi-for-research",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    poi = data.get("poi")
+    if not poi:
+        return None
+
+    return POIResearchTask(
+        point_id=poi["id"],
+        name=poi.get("name", ""),
+        point_type=poi.get("pointType", ""),
+        city=poi.get("city", ""),
+        country_code=poi.get("countryCode", ""),
+        latitude=poi.get("latitude", 0),
+        longitude=poi.get("longitude", 0),
+        description=poi.get("description", ""),
+        image_url=poi.get("imageUrl", ""),
+        wikipedia_url=poi.get("wikipediaUrl", ""),
+        opening_hours=poi.get("openingHours", ""),
+        phone=poi.get("phone", ""),
+        website=poi.get("website", ""),
+        address=poi.get("address", ""),
+        cuisine=poi.get("cuisine", ""),
+        operator_name=poi.get("operatorName", ""),
+        founded_year=poi.get("foundedYear", 0),
+        rating=poi.get("rating", 0),
+    )
+
+
+async def mark_poi_researched(point_id: int, research_event_id: int = 0) -> bool:
+    """POST /v1/api/research/mark-poi-researched — link research event to POI."""
+    if not is_configured():
+        return False
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/mark-poi-researched",
+            headers=_headers(),
+            json={"pointId": point_id, "researchEventId": research_event_id},
+        )
+        resp.raise_for_status()
+        return resp.json().get("status") == "marked"
+
+
 # ── Airport research pipeline ──
 
 
