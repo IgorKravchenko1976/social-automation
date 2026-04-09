@@ -152,7 +152,6 @@ async def lifespan(app: FastAPI):
     await _safe(expire_old_queued_publications(), "expire_old_pubs")
     await _safe(expire_inactive_platform_publications(), "expire_inactive_platforms")
     await _safe(ensure_daily_posts_exist(), "ensure_posts")
-    await _safe(publish_missed_slots(), "publish_missed")
 
     from stats.token_renewer import seed_tokens_from_env
     await _safe(seed_tokens_from_env(), "seed_tokens")
@@ -160,25 +159,32 @@ async def lifespan(app: FastAPI):
     from platforms.telegram import start_telegram_bot, stop_telegram_bot
     await _safe(start_telegram_bot(), "telegram_bot")
 
-    from scheduler.health_check import run_health_check
-    await _safe(run_health_check(), "health_check")
-
-    from scheduler.blog_sync import sync_blog_to_vps
-    await _safe(sync_blog_to_vps(), "blog_generate")
-
     from scheduler.server_monitor import start_monitor_loop, stop_monitor
     monitor_task = asyncio.create_task(start_monitor_loop())
+
+    async def _deferred_startup():
+        """Run slow startup tasks after the server is accepting requests."""
+        await asyncio.sleep(5)
+        await _safe(publish_missed_slots(), "publish_missed")
+        from scheduler.health_check import run_health_check
+        await _safe(run_health_check(), "health_check")
+        from scheduler.blog_sync import sync_blog_to_vps
+        await _safe(sync_blog_to_vps(), "blog_generate")
+
+    deferred_task = asyncio.create_task(_deferred_startup())
 
     logger.info("Social Media Automation is running! Schedule: %s (%s)",
                 settings.post_schedule, settings.timezone)
     yield
 
+    deferred_task.cancel()
     stop_monitor()
     monitor_task.cancel()
-    try:
-        await monitor_task
-    except asyncio.CancelledError:
-        pass
+    for t in (deferred_task, monitor_task):
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
 
     await stop_telegram_bot()
     scheduler.shutdown()
