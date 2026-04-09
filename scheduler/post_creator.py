@@ -300,9 +300,15 @@ async def _create_poi_spotlight_post(session: AsyncSession) -> Optional[Post]:
         await mark_poi_posted(point_id)
         post.log_pipeline("poi_mark", "ok", f"Point {point_id} marked as posted")
 
-    # Store POI image URL in post for later use by publisher
-    if poi.get("imageUrl"):
-        post.source_url = poi.get("imageUrl")
+    poi_image_url = poi.get("imageUrl") or ""
+    if poi_image_url:
+        from content.media import download_image_from_url
+        downloaded = await download_image_from_url(poi_image_url)
+        if downloaded:
+            post.image_path = downloaded
+            post.log_pipeline("image", "ok", f"Real photo from POI: {poi_image_url[:80]}")
+        else:
+            post.log_pipeline("image", "warn", f"POI image download failed: {poi_image_url[:80]}")
 
     await session.commit()
     logger.info("=== FRESH === POI post created: post_id=%d title='%s'",

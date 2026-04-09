@@ -416,23 +416,29 @@ async def _try_publish_post(
         # ── Phase 2: fetch image AFTER text + geo are ready ──
         image_path = post.image_path
         if not image_path:
-            best_text = next(
-                (p.content_adapted for p in publications if p.content_adapted),
-                post.content_raw or post.title or "travel",
-            )
             place = post.place_name or ""
-            country = ""
-            if post.latitude and post.longitude:
-                country = f" ({post.latitude:.1f}, {post.longitude:.1f})"
-            dalle_hint = (
-                f"Photorealistic travel photography of {place}{country}. "
-                f"Context: {best_text[:200]}. "
-                f"Beautiful scenery, professional travel magazine style, bright daylight."
-            )
-            query = f"{place} {best_text[:80]}".strip() or "travel landscape"
-            image_path = await get_image_for_post(
-                query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_hint,
-            )
+            query = f"{place} landmark" if place else "travel landscape"
+            if post.source == "poi":
+                image_path = await get_image_for_post(
+                    query, use_dalle=False, prefer_dalle=False,
+                )
+            if not image_path:
+                country = ""
+                if post.latitude and post.longitude:
+                    country = f" ({post.latitude:.1f}, {post.longitude:.1f})"
+                best_text = next(
+                    (p.content_adapted for p in publications if p.content_adapted),
+                    post.content_raw or post.title or "travel",
+                )
+                dalle_hint = (
+                    f"Photorealistic travel photography of {place}{country}. "
+                    f"Context: {best_text[:200]}. "
+                    f"Beautiful scenery, professional travel magazine style, bright daylight."
+                )
+                query = f"{place} {best_text[:80]}".strip() or "travel landscape"
+                image_path = await get_image_for_post(
+                    query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_hint,
+                )
             if image_path:
                 post.image_path = image_path
                 await session.commit()

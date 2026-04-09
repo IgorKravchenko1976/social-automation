@@ -92,6 +92,44 @@ async def generate_image_dalle(prompt: str) -> Optional[str]:
         return None
 
 
+async def download_image_from_url(url: str) -> Optional[str]:
+    """Download an image from a direct URL (e.g. Wikipedia/Wikimedia).
+
+    Returns local file path or None.
+    """
+    if not url or not url.startswith("http"):
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "ImInBot/1.0 (travel app; igork2011@gmail.com)",
+            })
+            if resp.status_code != 200:
+                logger.warning("[media] Download failed (%d) for %s", resp.status_code, url[:100])
+                return None
+
+            content_type = resp.headers.get("content-type", "")
+            if not any(t in content_type for t in ("image/", "octet-stream")):
+                logger.warning("[media] Not an image (%s): %s", content_type, url[:100])
+                return None
+
+            ext = "jpg"
+            if "png" in content_type:
+                ext = "png"
+            elif "webp" in content_type:
+                ext = "webp"
+
+            filename = f"poi_{uuid.uuid4().hex[:8]}.{ext}"
+            filepath = _get_media_dir() / filename
+            filepath.write_bytes(resp.content)
+            logger.info("[media] Downloaded real image: %s (%d KB)", filename, len(resp.content) // 1024)
+            return str(filepath)
+    except Exception:
+        logger.warning("[media] Failed to download image from %s", url[:100], exc_info=True)
+        return None
+
+
 async def get_image_for_post(
     query: str,
     use_dalle: bool = True,
