@@ -29,11 +29,28 @@ SYSTEM_PROMPT_POI_RESEARCH = """Ти — досвідчений дослідни
 {
   "summary": "Короткий опис місця (2-3 речення)",
   "location_name": "Назва місця",
+  "country_code": "UA",
   "history": [
     {"period": "рік або період", "description": "що сталось"}
   ],
+  "detailed_history": [
+    {"period": "I ст. н.е.", "description": "..."},
+    {"period": "V-IX ст.", "description": "..."},
+    {"period": "X-XIII ст.", "description": "..."},
+    {"period": "XIV-XVI ст.", "description": "..."},
+    {"period": "XVII-XVIII ст.", "description": "..."},
+    {"period": "XIX ст.", "description": "..."},
+    {"period": "XX ст.", "description": "..."},
+    {"period": "XXI ст.", "description": "..."}
+  ],
   "places": [
-    {"name": "назва поруч", "description": "що цікавого"}
+    {"name": "назва поруч", "type": "тип (city/museum/park/church/...)", "description": "що цікавого"}
+  ],
+  "regions": [
+    {"name": "Назва регіону/міста", "type": "region/city", "description": "коротко про регіон"}
+  ],
+  "news": [
+    {"title": "Заголовок", "description": "Про що", "source": "джерело"}
   ],
   "practical_info": {
     "best_time": "найкращий час для відвідування",
@@ -49,8 +66,12 @@ SYSTEM_PROMPT_POI_RESEARCH = """Ти — досвідчений дослідни
 1. ТІЛЬКИ українською мовою.
 2. НЕ вигадуй фактів — якщо не знаєш, не пиши.
 3. Історія: тільки те що ТОЧНО відомо. Краще менше але правдиво.
-4. Практична інфо: на основі наданих даних + загальновідомі факти.
-5. Поверни ТІЛЬКИ валідний JSON, нічого більше.
+4. detailed_history: детальна хронологія з нашої ери. Якщо це місто/країна — від античності до сучасності. Пропускай періоди яких не знаєш.
+5. regions: якщо це країна — перерахуй основні регіони/області. Якщо місто — основні райони. Якщо регіон — основні міста.
+6. news: якщо знаєш актуальні туристичні новини (фестивалі, відкриття, події) — додай. Якщо не знаєш — пусте [].
+7. places.type: обов'язково вкажи тип (city, region, island, museum, park, church, castle, beach тощо).
+8. Практична інфо: на основі наданих даних + загальновідомі факти.
+9. Поверни ТІЛЬКИ валідний JSON, нічого більше.
 
 === ЗАБОРОНЕНО ===
 Росія, Білорусь, окуповані території, небезпечні зони.
@@ -106,7 +127,7 @@ async def _generate_poi_research(poi: backend_client.POIResearchTask) -> dict | 
                 {"role": "system", "content": SYSTEM_PROMPT_POI_RESEARCH},
                 {"role": "user", "content": poi_text},
             ],
-            max_tokens=1500,
+            max_tokens=3000,
             temperature=0.6,
         )
         raw = response.choices[0].message.content.strip()
