@@ -274,16 +274,20 @@ async def _create_event_for_research(task: backend_client.NextTask, result: dict
         translations = await translate_content(title[:200], description[:4000], source_lang=source_lang)
 
         image_query = f"{location_name} travel landscape" if location_name else "travel landscape beautiful destination"
-        dalle_prompt = (
-            f"Photorealistic travel photography of {location_name or 'scenic destination'}, "
-            f"{task.country_code or ''}. Beautiful landscape, local architecture, "
-            f"natural scenery. Bright daylight, professional travel magazine style."
-        )
         photo_path = await get_image_for_post(
-            image_query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_prompt,
+            image_query, use_dalle=False, prefer_dalle=False,
         )
+        if not photo_path:
+            dalle_prompt = (
+                f"Photorealistic travel photography of {location_name or 'scenic destination'}, "
+                f"{task.country_code or ''}. Beautiful landscape, local architecture, "
+                f"natural scenery. Bright daylight, professional travel magazine style."
+            )
+            photo_path = await get_image_for_post(
+                image_query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_prompt,
+            )
         logger.info(
-            "[geo-processor] Event image for %s: %s (dalle-first)",
+            "[geo-processor] Event image for %s: %s (pexels-first)",
             task.research_code, "found" if photo_path else "none",
         )
 
