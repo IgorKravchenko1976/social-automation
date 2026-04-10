@@ -114,6 +114,19 @@ def _setup_scheduler() -> None:
                           id="airport_weekly_sync", replace_existing=True)
         logger.info("[airports] Weekly airport sync every Monday at 04:00")
 
+        from geo_agent.backend_client import trigger_sync_airports_to_points
+
+        async def _daily_sync_airports_to_points():
+            try:
+                result = await trigger_sync_airports_to_points()
+                logger.info("[airports] Sync airports → map_points: %s", result)
+            except Exception as exc:
+                logger.warning("[airports] Sync airports → map_points failed: %s", exc)
+
+        scheduler.add_job(_daily_sync_airports_to_points, CronTrigger(hour=7, minute=0, timezone=tz),
+                          id="airport_sync_to_points", replace_existing=True)
+        logger.info("[airports] Daily airports→map_points sync at 07:00")
+
         # Fix/translate pipeline for existing events & airports
         from geo_agent.fixer import run_fix_cycle
         scheduler.add_job(run_fix_cycle, "interval", minutes=3,

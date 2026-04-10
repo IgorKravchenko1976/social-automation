@@ -469,6 +469,20 @@ async def trigger_sync_airports() -> dict:
         return resp.json()
 
 
+async def trigger_sync_airports_to_points() -> dict:
+    """POST /v1/api/research/sync-airports-to-points — sync completed airports into map_points."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/sync-airports-to-points",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # ── Fix/update pipeline ──────────────────────────────────────────
 
 
