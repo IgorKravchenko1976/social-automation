@@ -128,5 +128,16 @@ def format_poi_for_ai(poi: dict) -> str:
         lines.append(f"Координати: {lat:.6f}, {lon:.6f}")
 
     lines.append("")
+    sources = []
+    if poi.get("wikipediaUrl"):
+        sources.append("Wikipedia")
+    if poi.get("description"):
+        sources.append("OpenStreetMap")
+    if poi.get("website"):
+        sources.append(poi["website"])
+    source_str = ", ".join(sources) if sources else "база даних I'M IN"
+    lines.append(f"--- ДЖЕРЕЛО ДАНИХ (ОБОВ'ЯЗКОВО вказати в пості!): {source_str} ---")
+
+    lines.append("")
     lines.append("=== КІНЕЦЬ ДАНИХ. Пиши ТІЛЬКИ на основі цих даних! ===")
     return "\n".join(lines)

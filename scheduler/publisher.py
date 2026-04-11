@@ -417,34 +417,47 @@ async def _try_publish_post(
         image_path = post.image_path
         if not image_path:
             place = post.place_name or ""
-            query = f"{place} landmark" if place else "travel landscape"
+
             if post.source == "poi":
+                # POI posts: NEVER use Pexels/DALL-E — these return random
+                # unrelated images (e.g. Pexels "Le Montclair" → museum in NJ).
+                # Better no photo than a WRONG photo.
+                logger.info(
+                    "=== PUBLISH === POI post_id=%d has no real photo — "
+                    "publishing WITHOUT image (Pexels/DALL-E disabled for POI)",
+                    post.id,
+                )
+                post.log_pipeline("image", "skip",
+                                  "No real POI photo; Pexels/DALL-E disabled for POI posts")
+            else:
+                query = f"{place} landmark" if place else "travel landscape"
                 image_path = await get_image_for_post(
                     query, use_dalle=False, prefer_dalle=False,
                 )
-            if not image_path:
-                country = ""
-                if post.latitude and post.longitude:
-                    country = f" ({post.latitude:.1f}, {post.longitude:.1f})"
-                best_text = next(
-                    (p.content_adapted for p in publications if p.content_adapted),
-                    post.content_raw or post.title or "travel",
-                )
-                dalle_hint = (
-                    f"Photorealistic travel photography of {place}{country}. "
-                    f"Context: {best_text[:200]}. "
-                    f"Beautiful scenery, professional travel magazine style, bright daylight."
-                )
-                query = f"{place} {best_text[:80]}".strip() or "travel landscape"
-                image_path = await get_image_for_post(
-                    query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_hint,
-                )
+                if not image_path:
+                    country = ""
+                    if post.latitude and post.longitude:
+                        country = f" ({post.latitude:.1f}, {post.longitude:.1f})"
+                    best_text = next(
+                        (p.content_adapted for p in publications if p.content_adapted),
+                        post.content_raw or post.title or "travel",
+                    )
+                    dalle_hint = (
+                        f"Photorealistic travel photography of {place}{country}. "
+                        f"Context: {best_text[:200]}. "
+                        f"Beautiful scenery, professional travel magazine style, bright daylight."
+                    )
+                    query = f"{place} {best_text[:80]}".strip() or "travel landscape"
+                    image_path = await get_image_for_post(
+                        query, use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_hint,
+                    )
+
             if image_path:
                 post.image_path = image_path
                 await session.commit()
             logger.info(
                 "=== PUBLISH === Image for post_id=%d place='%s': %s",
-                post.id, place, "found" if image_path else "none",
+                post.id, place, "found" if image_path else "none (text-only post)",
             )
 
         # ── Phase 3: publish with correct image ──
@@ -452,6 +465,18 @@ async def _try_publish_post(
             if pub.status == PostStatus.FAILED:
                 continue
             platform = Platform(pub.platform)
+
+            if platform == Platform.INSTAGRAM and not image_path and post.source == "poi":
+                pub.status = PostStatus.FAILED
+                pub.error_message = "POI post has no real photo; Instagram requires image; Pexels/DALL-E disabled for POI"
+                post.log_pipeline("publish", "skip",
+                                  f"{platform.value}: skipped — no real photo for POI, Instagram needs image")
+                logger.info(
+                    "=== PUBLISH === Skipping Instagram for POI post_id=%d — no real photo available",
+                    post.id,
+                )
+                continue
+
             await _publish_single(session, post, pub, platform, image_path)
 
         any_published = any(p.status == PostStatus.PUBLISHED for p in publications)

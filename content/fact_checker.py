@@ -123,6 +123,67 @@ _VAGUE_PHRASES = [
 ]
 
 
+def _check_source_citation(text: str, content_type: str) -> FactCheckResult | None:
+    """Verify POI posts contain a data source citation.
+
+    Returns a failing FactCheckResult if source is missing, or None if OK.
+    """
+    if content_type != "poi_spotlight":
+        return None
+
+    text_lower = text.lower()
+    has_source = any(marker in text_lower for marker in (
+        "📋 дані:", "📋 джерело:", "дані: wikipedia", "дані: openstreetmap",
+        "джерело: wikipedia", "джерело: openstreetmap",
+    ))
+    if not has_source:
+        return FactCheckResult(
+            passed=False,
+            claims=[{
+                "claim": "POI пост не містить джерела даних",
+                "status": "wrong",
+                "reason": "Пост про конкретну точку ОБОВ'ЯЗКОВО повинен мати рядок '📋 Дані:' з вказівкою джерела (Wikipedia, OpenStreetMap тощо)",
+            }],
+            summary="Пост не має джерела — редакторський контроль не пройдений",
+            suggestion="Додай рядок '📋 Дані: Wikipedia' або '📋 Дані: OpenStreetMap' з вказівкою звідки взяті дані",
+        )
+
+    return None
+
+
+def _check_subjective_embellishment(text: str, content_type: str) -> FactCheckResult | None:
+    """Check POI posts for fabricated subjective claims.
+
+    Blocks posts with adjectives like 'cozy', 'wonderful' etc. that the AI
+    cannot know without visiting the place.
+    """
+    if content_type != "poi_spotlight":
+        return None
+
+    text_lower = text.lower()
+    embellishment_phrases = [
+        "затишн", "комфортн", "неповторн", "чудов", "ідеальн",
+        "найкращ", "чарівн", "розкішн", "вишукан", "елегантн",
+        "тут ви зможете насолодитися", "тут на вас чекає",
+        "запрошує вас", "подарує вам", "ви відчуєте",
+        "не залишить байдужим", "справжня перлина",
+    ]
+    found = [p for p in embellishment_phrases if p in text_lower]
+    if len(found) >= 2:
+        return FactCheckResult(
+            passed=False,
+            claims=[{
+                "claim": f"Суб'єктивні прикраси: {', '.join(found[:3])}",
+                "status": "wrong",
+                "reason": "AI не може знати чи місце 'затишне' або 'чудове' — це вигадані оцінки",
+            }],
+            summary="Пост містить вигадані суб'єктивні оцінки замість фактів",
+            suggestion="Видали суб'єктивні прикраси ('затишний', 'чудовий', 'комфортний'). Пиши ТІЛЬКИ факти з наданих даних.",
+        )
+
+    return None
+
+
 def _check_information_density(text: str, content_type: str) -> FactCheckResult | None:
     """Quick programmatic check that the post contains substantive info.
 
@@ -178,6 +239,16 @@ async def fact_check_post(post_text: str, content_type: str = "") -> FactCheckRe
             summary=f"Пост містить заборонену територію: {blocked}",
             suggestion="Повністю переписати пост без згадки окупованих територій, Росії або зон бойових дій",
         )
+
+    source_fail = _check_source_citation(post_text, content_type)
+    if source_fail:
+        logger.warning("EDITORIAL BLOCK: POI post missing source citation — %s", source_fail.summary)
+        return source_fail
+
+    embellishment_fail = _check_subjective_embellishment(post_text, content_type)
+    if embellishment_fail:
+        logger.warning("EDITORIAL BLOCK: POI post has fabricated embellishments — %s", embellishment_fail.summary)
+        return embellishment_fail
 
     density_fail = _check_information_density(post_text, content_type)
     if density_fail:
