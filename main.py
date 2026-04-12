@@ -139,6 +139,28 @@ def _setup_scheduler() -> None:
                           id="poi_research_queue", replace_existing=True)
         logger.info("[poi-researcher] POI research queue enabled — every 5 min")
 
+        # Region research pipeline — hierarchical admin regions
+        from geo_agent.region_processor import seed_country_structure, process_region_queue
+
+        scheduler.add_job(seed_country_structure, CronTrigger(hour=5, minute=30, timezone=tz),
+                          id="region_seed_daily", replace_existing=True)
+        logger.info("[regions] Daily region seeder at 05:30")
+
+        async def _daily_build_region_queue():
+            try:
+                await backend_client.trigger_build_region_queue()
+                logger.info("[regions] Daily region queue rebuild triggered")
+            except Exception as exc:
+                logger.warning("[regions] Queue rebuild failed: %s", exc)
+
+        scheduler.add_job(_daily_build_region_queue, CronTrigger(hour=6, minute=10, timezone=tz),
+                          id="region_build_queue_daily", replace_existing=True)
+        logger.info("[regions] Daily region queue build at 06:10")
+
+        scheduler.add_job(process_region_queue, "interval", minutes=15,
+                          id="region_research_queue", replace_existing=True)
+        logger.info("[regions] Region research queue enabled — every 15 min")
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 

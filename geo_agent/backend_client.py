@@ -483,6 +483,156 @@ async def trigger_sync_airports_to_points() -> dict:
         return resp.json()
 
 
+# ── Region research pipeline ──────────────────────────────────────
+
+
+async def fetch_next_country_to_seed() -> Optional[dict]:
+    """GET /v1/api/research/next-country-to-seed — returns country to seed or None."""
+    if not is_configured():
+        return None
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/next-country-to-seed",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("empty"):
+        return None
+    return data
+
+
+async def seed_country_regions(country_code: str, regions: list[dict]) -> dict:
+    """POST /v1/api/research/seed-country-regions — bulk insert region structure."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    import json as _json
+
+    # Clean up nameTranslations: ensure they are proper JSON
+    for item in regions:
+        if "nameTranslations" in item and isinstance(item["nameTranslations"], dict):
+            item["nameTranslations"] = item["nameTranslations"]
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/seed-country-regions",
+            headers=_headers(),
+            json={"countryCode": country_code, "regions": regions},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_build_region_queue() -> dict:
+    """POST /v1/api/research/build-region-queue — rebuild daily region queue."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/build-region-queue",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_next_region() -> Optional[dict]:
+    """GET /v1/api/research/next-region — returns region task or None."""
+    if not is_configured():
+        return None
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/next-region",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("empty"):
+        return None
+    return data
+
+
+async def submit_region_result(
+    region_id: int,
+    queue_id: int = 0,
+    *,
+    failed: bool = False,
+    summary: str = "",
+    description: str = "",
+    summary_translations: dict | None = None,
+    description_translations: dict | None = None,
+    name_translations: dict | None = None,
+    image_url: str = "",
+    wikipedia_url: str = "",
+    population: int = 0,
+    area_km2: float = 0,
+    timezone: str = "",
+    extra: dict | None = None,
+) -> bool:
+    """POST /v1/api/research/region-result — submit research result for a region."""
+    if not is_configured():
+        return False
+
+    import json as _json
+
+    payload: dict = {
+        "regionId": region_id,
+        "queueId": queue_id,
+        "failed": failed,
+    }
+    if summary:
+        payload["summary"] = summary
+    if description:
+        payload["description"] = description
+    if summary_translations:
+        payload["summaryTranslations"] = summary_translations
+    if description_translations:
+        payload["descriptionTranslations"] = description_translations
+    if name_translations:
+        payload["nameTranslations"] = name_translations
+    if image_url:
+        payload["imageUrl"] = image_url
+    if wikipedia_url:
+        payload["wikipediaUrl"] = wikipedia_url
+    if population > 0:
+        payload["population"] = population
+    if area_km2 > 0:
+        payload["areaKm2"] = area_km2
+    if timezone:
+        payload["timezone"] = timezone
+    if extra:
+        payload["extra"] = extra
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/region-result",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json().get("ok", False)
+
+
+async def get_region_queue_status() -> dict:
+    """GET /v1/api/research/region-queue-status — current region queue state."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/research/region-queue-status",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # ── Fix/update pipeline ──────────────────────────────────────────
 
 
