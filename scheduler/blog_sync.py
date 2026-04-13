@@ -202,7 +202,8 @@ def _fetch_website_files() -> list[Path]:
         "terms.html", "privacy.html", "404.html",
         "terms-v1.html", "privacy-v1.html",
         "translations.js", "styles.css", "manifest.json",
-        "script.js", "favicon.svg",
+        "script.js", "favicon.svg", "open.html",
+        ".well-known/apple-app-site-association",
     ]
     result = []
     tmp_dir = Path(tempfile.mkdtemp(prefix="blog_tpl_"))
@@ -211,6 +212,7 @@ def _fetch_website_files() -> list[Path]:
             resp = httpx.get(f"{base}/{fname}", timeout=20, follow_redirects=True)
             if resp.status_code == 200:
                 local = tmp_dir / fname
+                local.parent.mkdir(parents=True, exist_ok=True)
                 local.write_bytes(resp.content)
                 result.append(local)
         except Exception:
@@ -374,10 +376,18 @@ def _sftp_push_to_root(files: list[Path]) -> int:
             transport.connect(username=user, password=password)
         sftp = paramiko.SFTPClient.from_transport(transport)
         for local_path in files:
-            remote_path = f"{root_dir}/{local_path.name}"
+            rel = local_path.name
+            for parent in local_path.parents:
+                if parent.name.startswith("blog_tpl_"):
+                    rel = str(local_path.relative_to(parent))
+                    break
+            remote_path = f"{root_dir}/{rel}"
+            if "/" in rel:
+                remote_subdir = str(Path(remote_path).parent)
+                _mkdir_p(sftp, remote_subdir)
             sftp.put(str(local_path), remote_path)
             pushed += 1
-            logger.info("SFTP root push: %s -> %s", local_path.name, remote_path)
+            logger.info("SFTP root push: %s -> %s", rel, remote_path)
         sftp.close()
         transport.close()
     except Exception:

@@ -9,7 +9,7 @@ import json
 import logging
 
 from content.ai_client import get_client
-from content.media import get_image_for_post, download_image_from_url, cleanup_media_file
+from content.media import download_image_from_url, cleanup_media_file
 from geo_agent import backend_client
 from geo_agent.translator import translate_content
 
@@ -234,18 +234,13 @@ async def _process_poi_research_inner() -> bool:
         if image_path:
             logger.info("[poi-researcher] Real photo for POI %d: %s", poi.point_id, poi.image_url[:80])
     if not image_path:
-        image_query = f"{poi.name} {poi.city} travel" if poi.city else f"{poi.name} travel"
-        image_path = await get_image_for_post(
-            image_query, use_dalle=False, prefer_dalle=False,
-        )
+        google_url = await backend_client.try_enrich_photo(poi.point_id)
+        if google_url:
+            image_path = await download_image_from_url(google_url)
+            if image_path:
+                logger.info("[poi-researcher] Google photo for POI %d: %s", poi.point_id, google_url[:80])
     if not image_path:
-        dalle_prompt = (
-            f"Photorealistic travel photography of {poi.name}, {poi.city} {poi.country_code}. "
-            f"Beautiful scenery, professional travel magazine style."
-        )
-        image_path = await get_image_for_post(
-            f"{poi.name} landmark", use_dalle=True, prefer_dalle=True, dalle_prompt=dalle_prompt,
-        )
+        logger.info("[poi-researcher] No photo for POI %d (wiki + google tried)", poi.point_id)
 
     research_code = f"poi_{poi.point_id}_{poi.name[:20].replace(' ', '_')}"
 
@@ -259,6 +254,7 @@ async def _process_poi_research_inner() -> bool:
             photo_path=image_path,
             content_language=source_lang,
             translations=translations,
+            point_id=poi.point_id,
         )
 
         cleanup_media_file(image_path)

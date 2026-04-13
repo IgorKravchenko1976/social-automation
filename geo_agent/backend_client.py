@@ -206,6 +206,7 @@ async def create_research_event(
     facility_type: str = "",
     content_language: str = "",
     translations: dict | None = None,
+    point_id: int | None = None,
 ) -> dict:
     """POST /v1/api/research/create-event — create a real event from research."""
     if not is_configured():
@@ -225,6 +226,8 @@ async def create_research_event(
     if translations:
         import json as _json
         data["translations"] = _json.dumps(translations, ensure_ascii=False)
+    if point_id:
+        data["pointId"] = str(point_id)
 
     async with httpx.AsyncClient(timeout=60) as client:
         if photo_path:
@@ -249,6 +252,32 @@ async def create_research_event(
 
         resp.raise_for_status()
         return resp.json()
+
+
+async def try_enrich_photo(point_id: int) -> str | None:
+    """GET /v1/api/research/try-enrich-photo — try Google Places photo for a POI without image.
+
+    Returns image URL if found, None otherwise.
+    """
+    if not is_configured() or not point_id:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{_base()}/v1/api/research/try-enrich-photo",
+                params={"pointId": str(point_id)},
+                headers=_headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            url = data.get("imageUrl", "")
+            if url:
+                logger.info("[backend] Google photo enriched for point %d: %s", point_id, url[:80])
+            return url if url else None
+    except Exception as e:
+        logger.warning("[backend] try-enrich-photo failed for point %d: %s", point_id, e)
+        return None
 
 
 async def get_daily_stats() -> dict:

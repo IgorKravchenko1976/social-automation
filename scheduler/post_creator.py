@@ -333,6 +333,12 @@ async def _create_poi_spotlight_post(session: AsyncSession) -> Optional[Post]:
         post.log_pipeline("poi_mark", "ok", f"Point {point_id} marked as posted")
 
     poi_image_url = poi.get("imageUrl") or ""
+    if not poi_image_url and point_id:
+        from geo_agent.backend_client import try_enrich_photo
+        google_url = await try_enrich_photo(point_id)
+        if google_url:
+            poi_image_url = google_url
+            post.log_pipeline("image", "ok", f"Google photo enriched: {google_url[:80]}")
     if poi_image_url:
         from content.media import download_image_from_url
         downloaded = await download_image_from_url(poi_image_url)

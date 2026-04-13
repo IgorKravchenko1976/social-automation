@@ -239,16 +239,25 @@ async def _prepare_publication_text(
     pub.content_adapted = text
 
     limits = PLATFORM_LIMITS.get(platform, {})
-    if limits.get("supports_links") and post.latitude and post.longitude:
-        map_url = build_map_link(post.latitude, post.longitude, post.place_name or "")
-        if "maps.google.com" not in (pub.content_adapted or ""):
-            map_suffix = f"\n\n📍 {post.place_name or 'На карті'}: {map_url}"
+    if limits.get("supports_links"):
+        link_suffix = ""
+
+        if post.poi_point_id:
+            app_link = f"https://www.im-in.net/point/{post.poi_point_id}"
+            link_suffix += f"\n\n📲 Відкрити в I'M IN: {app_link}"
+
+        if post.latitude and post.longitude:
+            map_url = build_map_link(post.latitude, post.longitude, post.place_name or "")
+            if "maps.google.com" not in (pub.content_adapted or ""):
+                link_suffix += f"\n📍 {post.place_name or 'На карті'}: {map_url}"
+
+        if link_suffix:
             max_len = limits.get("max_text_length", 4096)
-            if len(pub.content_adapted) + len(map_suffix) > max_len:
-                available = max_len - len(map_suffix) - 3
+            if len(pub.content_adapted) + len(link_suffix) > max_len:
+                available = max_len - len(link_suffix) - 3
                 if available >= 80:
                     pub.content_adapted = pub.content_adapted[:available] + "..."
-            pub.content_adapted += map_suffix
+            pub.content_adapted += link_suffix
 
     return True
 
