@@ -272,18 +272,27 @@ async def public_regenerate_content(limit: int = 3, offset: int = 0):
         )
         posts = result.scalars().all()
 
+        _RAW_POI_MARKERS = ("=== ДАНІ ПРО КОНКРЕТНУ ТОЧКУ", "=== КІНЕЦЬ ДАНИХ")
+
         processed = 0
         for post in posts:
             if processed >= limit:
                 break
             raw = post.content_raw or ""
-            if len(raw) > 500:
+            is_raw_poi = any(m in raw for m in _RAW_POI_MARKERS)
+
+            if len(raw) > 500 and not is_raw_poi:
                 skipped += 1
                 continue
 
             processed += 1
             try:
-                if post.source == "rss":
+                if is_raw_poi:
+                    full_text = await generate_post_text(
+                        topic="", platform=Platform.TELEGRAM,
+                        source_text=raw, content_type="poi_spotlight",
+                    )
+                elif post.source == "rss":
                     full_text = await generate_post_text(
                         topic="", platform=Platform.TELEGRAM,
                         source_text=raw, content_type="tourism_news",
@@ -294,7 +303,7 @@ async def public_regenerate_content(limit: int = 3, offset: int = 0):
                         topic=raw, platform=Platform.TELEGRAM, content_type=ct,
                     )
 
-                if full_text and len(full_text) > len(raw):
+                if full_text and (is_raw_poi or len(full_text) > len(raw)):
                     post.content_raw = full_text
                     tr = await translate_post(post.title or "", full_text)
                     if tr:

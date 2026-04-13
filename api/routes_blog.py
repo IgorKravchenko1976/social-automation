@@ -18,6 +18,12 @@ from api.schemas import BlogPostOut, ChatRequest, ChatResponse
 
 blog_router = APIRouter(prefix="/api", tags=["blog"])
 
+_RAW_POI_MARKERS = ("=== ДАНІ ПРО КОНКРЕТНУ ТОЧКУ", "=== КІНЕЦЬ ДАНИХ", "--- ДЖЕРЕЛО ДАНИХ")
+
+
+def _is_raw_poi(text: str) -> bool:
+    return any(m in text for m in _RAW_POI_MARKERS)
+
 
 @blog_router.get("/blog/posts", response_model=list[BlogPostOut])
 async def blog_posts(
@@ -52,9 +58,28 @@ async def blog_posts(
         .limit(limit)
     )
 
+    rows = result.all()
+    post_ids = [post.id for post, _ in rows]
+
+    adapted_texts: dict[int, str] = {}
+    if post_ids:
+        pubs_result = await session.execute(
+            select(Publication.post_id, Publication.platform, Publication.content_adapted)
+            .where(
+                Publication.post_id.in_(post_ids),
+                Publication.status == PostStatus.PUBLISHED,
+                Publication.content_adapted.isnot(None),
+            )
+        )
+        for pid, platform, text in pubs_result.all():
+            if not text:
+                continue
+            if pid not in adapted_texts or platform == Platform.TELEGRAM.value:
+                adapted_texts[pid] = text
+
     base_url = settings.webhook_base_url.rstrip("/")
     items: list[dict] = []
-    for post, published_at in result.all():
+    for post, published_at in rows:
         image_url = None
         if post.image_path:
             fname = Path(post.image_path).name
@@ -65,11 +90,16 @@ async def blog_posts(
                 tr = _json.loads(post.translations)
             except Exception:
                 pass
+
+        content = post.content_raw or ""
+        if _is_raw_poi(content) and post.id in adapted_texts:
+            content = adapted_texts[post.id]
+
         items.append(
             BlogPostOut(
                 id=post.id,
                 title=post.title,
-                content_raw=post.content_raw,
+                content_raw=content,
                 source=post.source,
                 source_url=post.source_url,
                 latitude=post.latitude,

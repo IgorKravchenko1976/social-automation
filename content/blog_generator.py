@@ -480,11 +480,18 @@ def generate_posts_index(posts: list[dict]) -> Path:
     return out_path
 
 
+def _is_raw_poi_data(text: str) -> bool:
+    """Detect if text is raw POI data dump rather than an AI-generated post."""
+    markers = ["=== ДАНІ ПРО КОНКРЕТНУ ТОЧКУ", "=== КІНЕЦЬ ДАНИХ", "--- ДЖЕРЕЛО ДАНИХ"]
+    return any(m in text for m in markers)
+
+
 async def generate_all_published() -> list[Path]:
     """Generate HTML pages for all published posts + index JSON."""
     from sqlalchemy import select, func, desc
     from db.database import async_session
     from db.models import Post, Publication, PostStatus
+    from config.platforms import Platform
 
     async with async_session() as session:
         pub_date_sub = (
@@ -504,6 +511,23 @@ async def generate_all_published() -> list[Path]:
         )
         rows = result.all()
 
+        adapted_texts: dict[int, str] = {}
+        if rows:
+            post_ids = [post.id for post, _ in rows]
+            pubs_result = await session.execute(
+                select(Publication.post_id, Publication.platform, Publication.content_adapted)
+                .where(
+                    Publication.post_id.in_(post_ids),
+                    Publication.status == PostStatus.PUBLISHED,
+                    Publication.content_adapted.isnot(None),
+                )
+            )
+            for pid, platform, text in pubs_result.all():
+                if not text:
+                    continue
+                if pid not in adapted_texts or platform == Platform.TELEGRAM.value:
+                    adapted_texts[pid] = text
+
     generated: list[Path] = []
     index_entries: list[dict] = []
 
@@ -520,10 +544,14 @@ async def generate_all_published() -> list[Path]:
         image_url = _thumb_url_if_exists(post.id)
         translations = _parse_translations(post.translations)
 
+        content = post.content_raw or ""
+        if _is_raw_poi_data(content) and post.id in adapted_texts:
+            content = adapted_texts[post.id]
+
         page = generate_post_html(
             post_id=post.id,
             title=post.title or "",
-            content=post.content_raw or "",
+            content=content,
             published_at=published_at,
             image_url=image_url,
             source_url=post.source_url,
@@ -537,7 +565,7 @@ async def generate_all_published() -> list[Path]:
         index_entries.append({
             "id": post.id,
             "title": post.title,
-            "content_raw": post.content_raw,
+            "content_raw": content,
             "source": post.source,
             "source_url": post.source_url,
             "latitude": post.latitude,

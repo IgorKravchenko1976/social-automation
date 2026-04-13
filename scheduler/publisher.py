@@ -509,7 +509,10 @@ async def _try_publish_post(
         ) or next(
             (p.content_adapted for p in publications if p.content_adapted), None,
         )
-        if best_text and len(best_text) > len(post.content_raw or ""):
+        if best_text and (
+            post.source == "poi"
+            or len(best_text) > len(post.content_raw or "")
+        ):
             post.content_raw = best_text
             if post.translations:
                 try:
