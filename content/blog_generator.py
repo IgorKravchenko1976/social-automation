@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = "https://www.im-in.net"
 BLOG_DIR_NAME = "blog"
-THUMB_SIZE = (260, 150)
+THUMB_MAX_WIDTH = 260
 THUMB_QUALITY = 80
 
 
@@ -47,23 +47,10 @@ def save_thumbnail(post_id: int, image_path: str) -> Optional[str]:
         img = Image.open(src)
         img = img.convert("RGB")
 
-        tw, th = THUMB_SIZE
         w, h = img.size
-        target_ratio = tw / th
-        img_ratio = w / h
-
-        if img_ratio > target_ratio:
-            new_h = h
-            new_w = int(h * target_ratio)
-            left = (w - new_w) // 2
-            img = img.crop((left, 0, left + new_w, new_h))
-        else:
-            new_w = w
-            new_h = int(w / target_ratio)
-            top = (h - new_h) // 2
-            img = img.crop((0, top, new_w, top + new_h))
-
-        img = img.resize(THUMB_SIZE, Image.LANCZOS)
+        if w > THUMB_MAX_WIDTH:
+            ratio = THUMB_MAX_WIDTH / w
+            img = img.resize((THUMB_MAX_WIDTH, int(h * ratio)), Image.LANCZOS)
 
         thumb_name = f"thumb-{post_id}.jpg"
         thumb_path = _blog_dir() / thumb_name
@@ -346,7 +333,7 @@ def generate_post_html(
         .post-header a:hover {{ color: #fff; }}
         .post-header img {{ height: 44px; width: 44px; border-radius: 50%; object-fit: cover; }}
         .post-hero {{
-            width: 100px; height: auto; object-fit: cover;
+            width: 130px; height: auto;
             border-radius: 8px; margin: 2rem 0 1.5rem;
             float: left; margin-right: 1.25rem; margin-bottom: 0.5rem;
         }}
@@ -393,7 +380,7 @@ def generate_post_html(
         .post-lang-bar button:hover:not(.active) {{ border-color: var(--primary); color: var(--primary); }}
         @media (max-width: 768px) {{
             .post-title {{ font-size: 1.35rem; }}
-            .post-hero {{ border-radius: 12px; max-height: 280px; }}
+            .post-hero {{ border-radius: 12px; }}
         }}
     </style>
 </head>
