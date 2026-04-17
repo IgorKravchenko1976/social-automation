@@ -81,9 +81,15 @@ def _parse_translations(raw: Optional[str]) -> dict:
 
 
 def _map_url(lat: float, lon: float, name: str = "") -> str:
+    """Legacy: kept for backward compat but no longer used for blog links."""
     from urllib.parse import quote
     q = quote(name) if name else f"{lat},{lon}"
     return f"https://www.google.com/maps/search/?api=1&query={q}"
+
+
+def _app_event_url(post_id: int) -> str:
+    """Link to event in I'M IN web app."""
+    return f"https://app.im-in.net/e/{post_id}"
 
 
 def _fmt_date(dt_val: Optional[datetime]) -> str:
@@ -161,9 +167,9 @@ def generate_post_html(
 
     geo_html = ""
     if latitude and longitude:
-        map_link = _map_url(latitude, longitude, place_name or "")
+        app_link = _app_event_url(post_id)
         geo_html = f"""
-        <a class="post-geo" href="{escape(map_link)}" target="_blank" rel="noopener">
+        <a class="post-geo" href="{escape(app_link)}" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                 <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1118 0z"/><circle cx="12" cy="10" r="3"/>
             </svg>
