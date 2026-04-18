@@ -12,6 +12,24 @@ debug_router = APIRouter(prefix="/api", tags=["debug"])
 _telethon_state: dict = {}
 
 
+@debug_router.get("/debug/poi-post-mapping")
+async def poi_post_mapping():
+    """Return mapping of post_id -> poi_point_id for all POI posts (for backfill)."""
+    from db.database import async_session
+    from db.models import Post
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(Post.id, Post.poi_point_id, Post.backend_event_id).where(
+                Post.source == "poi",
+                Post.poi_point_id.isnot(None),
+            ).order_by(Post.id)
+        )).all()
+    return [
+        {"post_id": r[0], "poi_point_id": r[1], "backend_event_id": r[2]}
+        for r in rows
+    ]
+
+
 @debug_router.get("/debug/comment-check")
 async def public_comment_check():
     """Diagnostic: Facebook & Instagram comment system check."""
