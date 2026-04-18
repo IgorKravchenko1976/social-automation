@@ -8,7 +8,7 @@ import httpx
 
 from config.settings import settings
 from config.platforms import Platform, FACEBOOK_GRAPH_API as GRAPH_API
-from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin
+from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin, retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
     """Instagram publishing via Facebook Graph API (graph.facebook.com).
 
     Tries two strategies to find the right token + IG account ID:
-    1. Instagram token + settings.instagram_user_id  (if user configured them)
-    2. Facebook Page token + auto-discovered IG Business Account ID
+    1. Facebook Page token + auto-discovered IG Business Account ID
+    2. Dedicated Instagram token + settings.instagram_user_id (fallback)
     """
     platform = Platform.INSTAGRAM
     _platform_name = "facebook"
@@ -26,9 +26,14 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
 
     _publish_token: str | None = None
     _publish_ig_id: str | None = None
+    _credential_source: str | None = None
 
     async def _resolve_credentials(self) -> tuple[str, str] | None:
-        """Find a working (token, ig_user_id) pair. Cached after first success."""
+        """Find a working (token, ig_user_id) pair.
+
+        Only caches the primary (FB Page token) path. Fallback is never cached
+        so that recovery to primary happens automatically on next call.
+        """
         if self._publish_token and self._publish_ig_id:
             return self._publish_token, self._publish_ig_id
 
@@ -39,16 +44,17 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
             if ig_id:
                 self._publish_token = fb_token
                 self._publish_ig_id = ig_id
+                self._credential_source = "fb_page"
                 logger.info("Instagram credentials: FB Page token + IG Business ID %s", ig_id)
                 return self._publish_token, self._publish_ig_id
 
         # Fallback: dedicated Instagram token + configured user ID
+        # NOT cached — so next call will retry the primary path first
         ig_token = await self._get_ig_token()
         if ig_token and settings.instagram_user_id:
-            self._publish_token = ig_token
-            self._publish_ig_id = settings.instagram_user_id
-            logger.info("Instagram credentials: IG token + user_id %s", settings.instagram_user_id)
-            return self._publish_token, self._publish_ig_id
+            self._credential_source = "ig_fallback"
+            logger.info("Instagram credentials: IG token + user_id %s (fallback, not cached)", settings.instagram_user_id)
+            return ig_token, settings.instagram_user_id
 
         logger.error("No valid Instagram credentials found")
         return None
@@ -235,6 +241,14 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
     async def publish_video(self, text: str, video_path: str) -> PublishResult:
         return PublishResult(success=False, error="Instagram video publishing not yet implemented")
 
+    async def _ig_get(self, client: httpx.AsyncClient, url: str, **kwargs) -> dict:
+        resp = await client.get(url, **kwargs)
+        return resp.json()
+
+    async def _ig_post(self, client: httpx.AsyncClient, url: str, **kwargs) -> dict:
+        resp = await client.post(url, **kwargs)
+        return resp.json()
+
     async def get_new_messages(self) -> list[dict]:
         try:
             creds = await self._resolve_credentials()
@@ -242,15 +256,16 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                 return []
             token, ig_id = creds
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(
+                data = await retry_on_transient(
+                    self._ig_get, client,
                     f"{GRAPH_API}/{ig_id}/media",
                     params={
                         "access_token": token,
                         "fields": "id,comments{id,from,text,timestamp}",
                         "limit": 5,
                     },
+                    label="IG get_messages",
                 )
-                data = resp.json()
                 if "error" in data:
                     logger.error("Instagram fetch media error: %s", data["error"])
                     return []
@@ -277,12 +292,13 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                 return False
             token, _ = creds
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
+                data = await retry_on_transient(
+                    self._ig_post, client,
                     f"{GRAPH_API}/{platform_message_id}/replies",
                     params={"access_token": token},
                     data={"message": text},
+                    label="IG send_reply",
                 )
-                data = resp.json()
                 if "error" in data:
                     logger.error("Instagram reply error: %s", data["error"])
                     return False

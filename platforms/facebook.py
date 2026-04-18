@@ -7,7 +7,7 @@ import httpx
 
 from config.settings import settings
 from config.platforms import Platform, FACEBOOK_GRAPH_API as GRAPH_API_BASE
-from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin
+from platforms.base import BasePlatform, PublishResult, TokenPlatformMixin, retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,14 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
     _platform_name = "facebook"
     _env_token_attr = "facebook_page_access_token"
 
+    async def _fb_get(self, client: httpx.AsyncClient, url: str, **kwargs) -> dict:
+        resp = await client.get(url, **kwargs)
+        return resp.json()
+
+    async def _fb_post(self, client: httpx.AsyncClient, url: str, **kwargs) -> dict:
+        resp = await client.post(url, **kwargs)
+        return resp.json()
+
     async def publish_text(self, text: str, image_path: Optional[str] = None) -> PublishResult:
         try:
             await self._ensure_token()
@@ -24,12 +32,13 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
                 if image_path:
                     return await self._publish_with_image(client, text, image_path)
 
-                resp = await client.post(
+                data = await retry_on_transient(
+                    self._fb_post, client,
                     f"{GRAPH_API_BASE}/{settings.facebook_page_id}/feed",
                     params={"access_token": self._token},
                     json={"message": text},
+                    label="FB publish_text",
                 )
-                data = resp.json()
                 if "error" in data:
                     err = data["error"].get("message", str(data["error"]))
                     logger.error("Facebook publish error: %s", err)
@@ -96,19 +105,20 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
             return False, f"Exception: {e}"
 
     async def get_new_messages(self) -> list[dict]:
-        """Fetch recent comments on page posts."""
+        """Fetch recent comments on page posts (with retry on transient errors)."""
         try:
             await self._ensure_token()
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(
+                data = await retry_on_transient(
+                    self._fb_get, client,
                     f"{GRAPH_API_BASE}/{settings.facebook_page_id}/feed",
                     params={
                         "access_token": self._token,
                         "fields": "id,comments.limit(50){id,from,message,created_time}",
                         "limit": 10,
                     },
+                    label="FB get_messages",
                 )
-                data = resp.json()
                 if "error" in data:
                     logger.error("Facebook fetch messages error: %s", data["error"])
                     return []
@@ -133,12 +143,13 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
         try:
             await self._ensure_token()
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
+                data = await retry_on_transient(
+                    self._fb_post, client,
                     f"{GRAPH_API_BASE}/{platform_message_id}/comments",
                     params={"access_token": self._token},
                     json={"message": text},
+                    label="FB send_reply",
                 )
-                data = resp.json()
                 if "error" in data:
                     logger.error("Facebook reply error: %s", data["error"])
                     return False

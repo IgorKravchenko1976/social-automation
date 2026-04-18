@@ -51,11 +51,24 @@ async def _save_token(platform: str, token: str, expires_at: datetime | None) ->
         await session.commit()
 
 
+async def _debug_fb_token(client: httpx.AsyncClient, token: str) -> dict:
+    """Call debug_token and return the data payload with type, scopes, validity."""
+    resp = await client.get(
+        f"{GRAPH_API}/debug_token",
+        params={"input_token": token, "access_token": token},
+    )
+    return resp.json().get("data", {})
+
+
 async def _renew_facebook() -> bool:
     """Exchange current Facebook Page Token for a new long-lived one.
 
-    Flow: current_page_token → fb_exchange_token → new long-lived page token.
-    Requires facebook_app_id + facebook_app_secret.
+    Flow:
+    1. Debug current token — check validity, type, expiry
+    2. If still valid for >7 days — just save and return
+    3. Exchange via fb_exchange_token
+    4. Verify the new token is still a PAGE token (not USER)
+    5. If USER token returned — try to convert to Page token via /{user-id}/accounts
     """
     app_id = settings.facebook_app_id
     app_secret = settings.facebook_app_secret
@@ -72,13 +85,16 @@ async def _renew_facebook() -> bool:
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            debug_resp = await client.get(
-                f"{GRAPH_API}/debug_token",
-                params={"input_token": current_token, "access_token": current_token},
-            )
-            debug_data = debug_resp.json().get("data", {})
+            debug_data = await _debug_fb_token(client, current_token)
             expires_ts = debug_data.get("expires_at", 0)
             is_valid = debug_data.get("is_valid", False)
+            token_type = debug_data.get("type", "unknown")
+            scopes = debug_data.get("scopes", [])
+
+            logger.info(
+                "Facebook token debug: valid=%s, type=%s, scopes=%s",
+                is_valid, token_type, ",".join(scopes[:5]) if scopes else "none",
+            )
 
             if not is_valid:
                 logger.error("Facebook token is invalid — manual renewal required")
@@ -124,14 +140,29 @@ async def _renew_facebook() -> bool:
             if new_expires_in:
                 new_expires_at = datetime.now(timezone.utc) + timedelta(seconds=new_expires_in)
 
-            new_debug = await client.get(
-                f"{GRAPH_API}/debug_token",
-                params={"input_token": new_token, "access_token": new_token},
-            )
-            new_debug_data = new_debug.json().get("data", {})
-            final_expires = new_debug_data.get("expires_at", 0)
+            new_debug = await _debug_fb_token(client, new_token)
+            new_type = new_debug.get("type", "unknown")
+            final_expires = new_debug.get("expires_at", 0)
             if final_expires and final_expires > 0:
                 new_expires_at = datetime.fromtimestamp(final_expires, tz=timezone.utc)
+
+            logger.info("Exchanged token type: %s (was: %s)", new_type, token_type)
+
+            # If exchange returned a USER token, try to get Page token from it
+            if new_type.upper() == "USER" and settings.facebook_page_id:
+                logger.warning("Exchange returned USER token — converting to Page token via /accounts")
+                page_token = await _get_page_token_from_user(client, new_token, settings.facebook_page_id)
+                if page_token:
+                    new_token = page_token
+                    pt_debug = await _debug_fb_token(client, new_token)
+                    pt_expires = pt_debug.get("expires_at", 0)
+                    if pt_expires and pt_expires > 0:
+                        new_expires_at = datetime.fromtimestamp(pt_expires, tz=timezone.utc)
+                    else:
+                        new_expires_at = None
+                    logger.info("Successfully converted to Page token (type: %s)", pt_debug.get("type"))
+                else:
+                    logger.warning("Could not convert to Page token — saving User token as-is")
 
             await _save_token("facebook", new_token, new_expires_at)
 
@@ -142,6 +173,28 @@ async def _renew_facebook() -> bool:
     except Exception:
         logger.exception("Facebook token renewal failed")
         return False
+
+
+async def _get_page_token_from_user(
+    client: httpx.AsyncClient, user_token: str, page_id: str,
+) -> str | None:
+    """Use a User Access Token to retrieve the Page Access Token for a specific page."""
+    try:
+        resp = await client.get(
+            f"{GRAPH_API}/me/accounts",
+            params={"access_token": user_token, "fields": "id,access_token"},
+        )
+        data = resp.json()
+        if "error" in data:
+            logger.error("Failed to list pages from user token: %s", data["error"].get("message"))
+            return None
+        for page in data.get("data", []):
+            if page.get("id") == page_id:
+                return page.get("access_token")
+        logger.warning("Page %s not found in user's pages list", page_id)
+    except Exception:
+        logger.exception("Failed to get Page token from User token")
+    return None
 
 
 async def _renew_instagram() -> bool:

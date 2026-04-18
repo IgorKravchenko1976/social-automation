@@ -133,7 +133,7 @@ async def run_health_check() -> None:
     if now.hour >= 20 and stats_count == 0:
         problems.append("No DailyStats collected today (report may be empty)")
 
-    # ── 6. Token expiry ─────────────────────────────────────────
+    # ── 6. Token expiry + live page access check ──────────────
     try:
         from config.settings import ensure_utc
         from db.models import TokenStore
@@ -149,6 +149,29 @@ async def run_health_check() -> None:
                     logger.info("[TOKEN] %s OK (expires in %d days)", tok.platform, days_left)
     except Exception:
         logger.exception("[TOKEN] Failed to check tokens")
+
+    # Live test: verify FB token can actually access the page (detects account blocks)
+    try:
+        import httpx
+        from stats.token_renewer import get_active_token
+        from config.platforms import FACEBOOK_GRAPH_API
+        fb_token = await get_active_token("facebook") or settings.facebook_page_access_token
+        if fb_token and settings.facebook_page_id:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"{FACEBOOK_GRAPH_API}/{settings.facebook_page_id}",
+                    params={"access_token": fb_token, "fields": "id,name"},
+                )
+                live_data = r.json()
+                if "error" in live_data:
+                    err_msg = live_data["error"].get("message", "")[:120]
+                    err_code = live_data["error"].get("code", 0)
+                    problems.append(f"FB page access BLOCKED (code {err_code}): {err_msg}")
+                    logger.warning("[TOKEN] FB live check FAILED (code %s): %s", err_code, err_msg)
+                else:
+                    logger.info("[TOKEN] FB live check OK — page '%s' accessible", live_data.get("name", "?"))
+    except Exception:
+        logger.exception("[TOKEN] FB live check failed")
 
     # ── Summary ─────────────────────────────────────────────────
     if problems:

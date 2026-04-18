@@ -47,9 +47,9 @@ def _setup_scheduler() -> None:
                       id="daily_report", replace_existing=True)
     scheduler.add_job(renew_all_tokens, CronTrigger(hour=3, minute=0, timezone=tz),
                       id="renew_tokens", replace_existing=True)
-    scheduler.add_job(poll_all_messages, "interval", minutes=5,
+    scheduler.add_job(poll_all_messages, "interval", minutes=15,
                       id="poll_messages", replace_existing=True)
-    scheduler.add_job(respond_to_pending_messages, "interval", minutes=6,
+    scheduler.add_job(respond_to_pending_messages, "interval", minutes=16,
                       id="auto_reply", replace_existing=True)
     scheduler.add_job(retry_failed_publications, "interval", hours=1,
                       id="retry_failed", replace_existing=True)
