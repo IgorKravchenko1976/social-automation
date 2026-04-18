@@ -22,7 +22,7 @@ _lock = asyncio.Lock()
 DAILY_LIMIT = 50
 
 
-SUMMARIZE_SYSTEM_PROMPT = """You are a travel researcher. You are given web search results about a place.
+SUMMARIZE_SYSTEM_PROMPT = """You are a travel researcher. You are given web search results about a SPECIFIC VENUE/ESTABLISHMENT.
 Create a structured JSON summary using ONLY information from the provided search results.
 
 Return ONLY valid JSON:
@@ -41,7 +41,13 @@ Rules:
 2. If a field has no data in sources, set it to ""
 3. Write in Ukrainian language
 4. Include specific details: dates, names, numbers
-5. Return ONLY valid JSON"""
+5. Return ONLY valid JSON
+
+CRITICAL — NAME vs CONTENT:
+The place NAME is just a brand/label for the venue (bar, restaurant, gym, shop, monument).
+You MUST write about THE VENUE ITSELF — NOT about the literal meaning of its name.
+Example: if the bar is called "Лось" (Moose), write about the bar, NOT about the moose animal.
+If search results contain info about the literal name meaning (animal, person, concept) instead of the venue — IGNORE those results and return empty fields."""
 
 
 async def process_poi_research() -> bool:
@@ -143,7 +149,53 @@ async def _research_poi(poi: backend_client.POIResearchTask) -> list[dict]:
     if research_data is None:
         return []
 
+    if _is_name_confusion(research_data, poi):
+        logger.warning(
+            "[poi-researcher] REJECTED POI %d (%s): content is about the literal name meaning, not the venue",
+            poi.point_id, poi.name,
+        )
+        return []
+
     return _build_blocks(research_data, sources, ai_provider, poi)
+
+
+_NAME_CONFUSION_MARKERS = [
+    "тварина", "ссавець", "птах", "комаха", "рослина", "дерево", "квітка",
+    "вид роду", "клас ", "ряд ", "родина ", "царство ",
+    "(alces", "(cervus", "(ursus", "(canis", "(felis",
+    "латинською", "наукова назва",
+    "fictional character", "mytholog", "давньогрецьк",
+    "множ. мн.:", "(множ.", "(англ.", "біологічн",
+]
+
+
+def _is_name_confusion(data: dict, poi: backend_client.POIResearchTask) -> bool:
+    """Detect if AI wrote about the literal name meaning instead of the venue.
+
+    E.g. bar "Лось" → AI wrote about the moose animal instead of the bar.
+    """
+    summary = (data.get("summary") or "").lower()
+    history = (data.get("history") or "").lower()
+    combined = f"{summary} {history}"
+
+    if len(combined) < 20:
+        return False
+
+    venue_types = {"bar", "restaurant", "cafe", "gym", "shop", "hotel", "club", "бар",
+                   "ресторан", "кафе", "зал", "магазин", "готель", "клуб", "заклад"}
+    has_venue_mention = any(vt in combined for vt in venue_types)
+
+    confusion_hits = sum(1 for marker in _NAME_CONFUSION_MARKERS if marker in combined)
+
+    if confusion_hits >= 2 and not has_venue_mention:
+        return True
+
+    if confusion_hits >= 1 and not has_venue_mention:
+        poi_type = poi.point_type.lower().replace("_", " ")
+        if poi_type in ("bar", "restaurant", "cafe", "fast food", "gym", "shop", "hotel"):
+            return True
+
+    return False
 
 
 def _build_blocks(
@@ -193,10 +245,13 @@ async def _summarize_with_gpt(name: str, city: str, point_type: str, search_cont
     """Summarize web search results using GPT-4o-mini."""
     client = get_client()
 
+    type_label = point_type.replace("_", " ")
     user_prompt = (
-        f"Place: {name}, {city}\nType: {point_type.replace('_', ' ')}\n\n"
+        f"Venue: \"{name}\" (a {type_label} in {city})\n\n"
+        f"IMPORTANT: \"{name}\" is the NAME of a {type_label}. "
+        f"Write about the venue itself, NOT about the literal meaning of the word \"{name}\".\n\n"
         f"Web search results:\n{search_context}\n\n"
-        "Summarize the above search results into structured JSON about this place."
+        "Summarize the above search results into structured JSON about this specific venue."
     )
 
     try:
@@ -224,18 +279,21 @@ async def _gpt_knowledge_only(poi: backend_client.POIResearchTask) -> dict | Non
     """Last resort: use GPT knowledge without web search (lowest confidence)."""
     client = get_client()
 
+    type_label = poi.point_type.replace("_", " ")
     user_prompt = (
-        f"Place: {poi.name}\n"
+        f"Venue: \"{poi.name}\" (a {type_label})\n"
         f"City: {poi.city}\n"
         f"Country: {poi.country_code}\n"
-        f"Type: {poi.point_type.replace('_', ' ')}\n"
     )
     if poi.description:
         user_prompt += f"Existing description: {poi.description[:500]}\n"
 
     user_prompt += (
-        "\nTell me what you know about this place. "
-        "Only include facts you are confident about."
+        f"\nIMPORTANT: \"{poi.name}\" is the NAME of a {type_label}. "
+        f"Write about the venue itself, NOT about the literal meaning of the word \"{poi.name}\".\n"
+        "Tell me what you know about this specific venue. "
+        "Only include facts you are confident about. "
+        "If you don't know anything about this specific venue, return all fields as empty strings."
     )
 
     try:

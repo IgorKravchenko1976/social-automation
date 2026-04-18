@@ -41,7 +41,7 @@ class PerplexityResult:
     raw_response: dict = field(default_factory=dict)
 
 
-RESEARCH_SYSTEM_PROMPT = """You are a travel researcher. Given a place name and location, 
+RESEARCH_SYSTEM_PROMPT = """You are a travel researcher. Given a SPECIFIC VENUE/ESTABLISHMENT and its location,
 research it thoroughly using web search. Return ONLY valid JSON with this structure:
 {
   "summary": "2-3 sentence overview of the place",
@@ -59,7 +59,15 @@ Rules:
 2. If you don't find information for a field, set it to empty string ""
 3. Write in Ukrainian language
 4. Never invent facts - accuracy is critical
-5. Include specific details: dates, names, numbers when available"""
+5. Include specific details: dates, names, numbers when available
+
+CRITICAL — NAME vs CONTENT:
+The place NAME is just a brand/label for a venue (bar, restaurant, gym, shop, monument, etc.).
+You MUST write about THE VENUE ITSELF — its atmosphere, menu, service, location, reviews.
+NEVER write a Wikipedia article about the literal meaning of the name.
+Example: "Бар «Лось»" is a BAR in Paris — write about the bar, NOT about the moose animal.
+Example: "Gym Hercules" is a GYM — write about the gym, NOT about the Greek demigod.
+If you cannot find information about the specific venue, return all fields as empty strings."""
 
 
 async def research_place(
@@ -84,12 +92,12 @@ async def research_place(
         location_parts.append(country)
     location_str = ", ".join(location_parts)
 
-    user_prompt = f"Research this place: {location_str}"
-    if point_type:
-        user_prompt += f"\nType: {point_type.replace('_', ' ')}"
+    type_label = point_type.replace("_", " ") if point_type else "place"
+    user_prompt = f"Research this specific {type_label}: \"{name}\" located in {', '.join(location_parts[1:]) or 'unknown location'}"
+    user_prompt += f"\n\nIMPORTANT: \"{name}\" is the NAME of a {type_label}. Research the venue itself, NOT the literal meaning of the word \"{name}\"."
     if extra_context:
         user_prompt += f"\nAdditional context: {extra_context}"
-    user_prompt += "\n\nFind real facts about this place from the internet. Return JSON."
+    user_prompt += "\n\nFind real facts about this specific venue/establishment from the internet. Return JSON."
 
     try:
         response = await client.chat.completions.create(
