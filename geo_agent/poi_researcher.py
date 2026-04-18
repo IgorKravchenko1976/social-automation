@@ -110,10 +110,12 @@ async def _research_poi(poi: backend_client.POIResearchTask) -> list[dict]:
         )
         if result and result.content:
             research_data = parse_research_json(result)
+            if research_data is None and len(result.content) > 50:
+                research_data = {"summary": result.content}
             sources = [{"url": url, "title": "", "snippet": ""} for url in result.citations[:10]]
             ai_provider = "perplexity"
-            logger.info("[poi-researcher] Perplexity found %d citations for POI %d",
-                        len(result.citations), poi.point_id)
+            logger.info("[poi-researcher] Perplexity found %d citations for POI %d (json=%s)",
+                        len(result.citations), poi.point_id, research_data is not None and "summary" not in research_data)
 
     # Strategy 2: Tavily/Brave search + GPT-4o-mini summarization
     if research_data is None:
@@ -168,7 +170,7 @@ def _build_blocks(
 
     for data_key, (block_type, default_title) in field_map.items():
         content = data.get(data_key, "")
-        if not content or not isinstance(content, str) or len(content.strip()) < 20:
+        if not content or not isinstance(content, str) or len(content.strip()) < 10:
             continue
 
         blocks.append({
@@ -179,6 +181,10 @@ def _build_blocks(
             "aiProvider": ai_provider,
             "confidence": base_confidence,
         })
+
+    if not blocks:
+        logger.warning("[poi-researcher] No blocks built from data keys: %s",
+                       {k: len(str(v)) for k, v in data.items() if v})
 
     return blocks
 
