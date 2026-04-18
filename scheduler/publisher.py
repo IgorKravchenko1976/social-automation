@@ -242,8 +242,8 @@ async def _prepare_publication_text(
     if limits.get("supports_links"):
         link_suffix = ""
 
-        if post.poi_point_id:
-            app_link = f"https://app.im-in.net/e/{post.id}"
+        if post.poi_point_id and post.backend_event_id:
+            app_link = f"https://app.im-in.net/e/{post.backend_event_id}"
             link_suffix += f"\n\n📲 Відкрити в I'M IN: {app_link}"
 
         if link_suffix:
@@ -536,6 +536,7 @@ async def _try_publish_post(
                     latitude=post.latitude, longitude=post.longitude,
                     place_name=post.place_name,
                     translations=_parse_translations(post.translations),
+                    backend_event_id=post.backend_event_id,
                 )
             except Exception:
                 logger.warning("Blog page generation failed for post_id=%d", post.id, exc_info=True)

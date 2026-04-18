@@ -87,9 +87,9 @@ def _map_url(lat: float, lon: float, name: str = "") -> str:
     return f"https://www.google.com/maps/search/?api=1&query={q}"
 
 
-def _app_event_url(post_id: int) -> str:
-    """Link to event in I'M IN web app."""
-    return f"https://app.im-in.net/e/{post_id}"
+def _app_event_url(event_id: int) -> str:
+    """Link to event in I'M IN web app (uses backend event ID)."""
+    return f"https://app.im-in.net/e/{event_id}"
 
 
 def _fmt_date(dt_val: Optional[datetime]) -> str:
@@ -148,6 +148,7 @@ def generate_post_html(
     longitude: Optional[float] = None,
     place_name: Optional[str] = None,
     translations: Optional[dict] = None,
+    backend_event_id: Optional[int] = None,
 ) -> Path:
     """Generate a static HTML page for a single post. Returns the file path."""
 
@@ -166,8 +167,8 @@ def generate_post_html(
     description = escape((content or "")[:160].replace("\n", " "))
 
     geo_html = ""
-    if latitude and longitude:
-        app_link = _app_event_url(post_id)
+    if latitude and longitude and backend_event_id:
+        app_link = _app_event_url(backend_event_id)
         geo_html = f"""
         <a class="post-geo" href="{escape(app_link)}" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
@@ -552,6 +553,7 @@ async def generate_all_published() -> list[Path]:
             longitude=post.longitude,
             place_name=post.place_name,
             translations=translations,
+            backend_event_id=post.backend_event_id,
         )
         generated.append(page)
 

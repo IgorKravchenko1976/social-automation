@@ -45,6 +45,37 @@ async def fetch_next_poi() -> Optional[dict]:
         return None
 
 
+async def ensure_event_for_point(point_id: int) -> int | None:
+    """Get or create a backend event for the given map_point.
+
+    Returns the backend event ID (events.entity_id) or None on failure.
+    """
+    base = settings.imin_backend_api_base.rstrip("/")
+    key = settings.imin_backend_sync_key
+    if not base or not key:
+        logger.warning("[poi_client] Backend API not configured")
+        return None
+
+    url = f"{base}/v1/api/research/ensure-event-for-point"
+    headers = {"X-Sync-Key": key}
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(url, headers=headers, params={"pointId": str(point_id)})
+            resp.raise_for_status()
+            data = resp.json()
+            event_id = data.get("eventId")
+            if event_id:
+                created = data.get("created", False)
+                logger.info("[poi_client] Event for point %d: eventId=%d (created=%s)",
+                            point_id, event_id, created)
+                return int(event_id)
+            return None
+    except Exception as e:
+        logger.error("[poi_client] Failed to ensure event for point %d: %s", point_id, e)
+        return None
+
+
 async def mark_poi_posted(point_id: int) -> bool:
     """Mark a POI as posted to social media so it won't be selected again."""
     base = settings.imin_backend_api_base.rstrip("/")

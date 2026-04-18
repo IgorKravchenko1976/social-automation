@@ -20,7 +20,7 @@ from content.tourism_topics import (
     ACTIVE_DIRECTIONS, LEISURE_DIRECTIONS, FEATURE_DIRECTIONS,
 )
 from content.rss_parser import fetch_feed
-from content.poi_client import fetch_next_poi, mark_poi_posted, format_poi_for_ai
+from content.poi_client import fetch_next_poi, mark_poi_posted, format_poi_for_ai, ensure_event_for_point
 from db.database import async_session
 from db.models import Post, Publication
 
@@ -331,6 +331,15 @@ async def _create_poi_spotlight_post(session: AsyncSession) -> Optional[Post]:
     if point_id:
         await mark_poi_posted(point_id)
         post.log_pipeline("poi_mark", "ok", f"Point {point_id} marked as posted")
+
+        backend_eid = await ensure_event_for_point(point_id)
+        if backend_eid:
+            post.backend_event_id = backend_eid
+            post.log_pipeline("backend_event", "ok",
+                              f"Event {backend_eid} for point {point_id}")
+        else:
+            post.log_pipeline("backend_event", "warn",
+                              f"Could not ensure backend event for point {point_id}")
 
     poi_image_url = poi.get("imageUrl") or ""
     if not poi_image_url and point_id:
