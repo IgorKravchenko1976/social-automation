@@ -149,6 +149,13 @@ async def _research_poi(poi: backend_client.POIResearchTask) -> list[dict]:
     if research_data is None:
         return []
 
+    if research_data.get("_rejected"):
+        logger.warning(
+            "[poi-researcher] REJECTED POI %d (%s): banned territory or blocked content",
+            poi.point_id, poi.name,
+        )
+        return []
+
     if _is_name_confusion(research_data, poi):
         logger.warning(
             "[poi-researcher] REJECTED POI %d (%s): content is about the literal name meaning, not the venue",
@@ -293,7 +300,9 @@ async def _gpt_knowledge_only(poi: backend_client.POIResearchTask) -> dict | Non
         f"Write about the venue itself, NOT about the literal meaning of the word \"{poi.name}\".\n"
         "Tell me what you know about this specific venue. "
         "Only include facts you are confident about. "
-        "If you don't know anything about this specific venue, return all fields as empty strings."
+        "If you don't know anything about this specific venue, return all fields as empty strings.\n"
+        "If this venue is in Crimea, Donetsk, Luhansk, Russia, or Belarus — return {\"_rejected\": true}.\n"
+        "No subjective adjectives (cozy, wonderful, comfortable). Only verifiable facts."
     )
 
     try:
