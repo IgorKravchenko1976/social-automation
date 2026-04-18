@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     imin_backend_api_base: str = ""
     imin_backend_sync_key: str = ""
 
+    # Web search AI for POI research (fallback chain: Perplexity -> Tavily -> Brave)
+    perplexity_api_key: str = ""
+    tavily_api_key: str = ""
+    brave_search_api_key: str = ""
+
     # Persistent data directory (mount Railway Volume here)
     data_dir: str = "/data"
 

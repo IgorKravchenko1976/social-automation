@@ -13,6 +13,41 @@ logger = logging.getLogger(__name__)
 REPORT_EMAIL = "igork2011@gmail.com"
 
 
+def _build_poi_research_block(stats: dict) -> str:
+    poi_today = stats.get("poiResearchedToday", 0)
+    poi_total = stats.get("poiResearchedTotal", 0)
+    poi_blocks = stats.get("poiBlocksTotal", 0)
+    poi_pending = stats.get("poiPendingResearch", 0)
+
+    if poi_today == 0 and poi_total == 0 and poi_pending == 0:
+        return ""
+
+    return f"""
+        <div style="margin-bottom:20px">
+            <h2 style="font-size:16px;color:#60a5fa;margin-bottom:8px">\U0001f50d POI Research (web search)</h2>
+            <div style="background:#16213e;border-radius:8px;padding:16px">
+                <table style="width:100%;border-collapse:collapse">
+                    <tr>
+                        <td style="padding:6px 8px;color:#e0e0e0">\U0001f4dd Досліджено сьогодні</td>
+                        <td style="padding:6px 8px;color:#60a5fa;text-align:center;font-weight:600">{poi_today}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:6px 8px;color:#e0e0e0">\U0001f4da Всього досліджено</td>
+                        <td style="padding:6px 8px;color:#60a5fa;text-align:center">{poi_total}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:6px 8px;color:#e0e0e0">\U0001f4c4 Блоків інформації</td>
+                        <td style="padding:6px 8px;color:#60a5fa;text-align:center">{poi_blocks}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:6px 8px;color:#e0e0e0">\u23f3 В черзі</td>
+                        <td style="padding:6px 8px;color:#f59e0b;text-align:center;font-weight:600">{poi_pending}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>"""
+
+
 def _build_html(stats: dict) -> str:
     date = stats.get("date", "?")
     completed = stats.get("completedToday", 0)
@@ -111,6 +146,7 @@ def _build_html(stats: dict) -> str:
             </div>
             {countries_block}
             {errors_block}
+            {_build_poi_research_block(stats)}
             <div style="text-align:center;padding:12px;color:#9ca3af;font-size:11px;border-top:1px solid #333;margin-top:16px">
                 I'M IN \u2014 Geo Research Bot | <a href="https://www.im-in.net" style="color:#60a5fa">www.im-in.net</a>
             </div>

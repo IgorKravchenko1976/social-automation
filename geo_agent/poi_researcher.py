@@ -1,158 +1,51 @@
-"""POI research processor — generates deep research content for enriched POI points.
+"""POI research processor — generates web-sourced research content for POI points.
 
-Flow: fetch enriched+posted POI → AI generates research → translate → create event → link back.
+Flow: fetch enriched POI → web search (Perplexity/Tavily/Brave) → parse blocks → translate → submit.
+Each block has real source URLs for verification.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+from typing import Any
 
 from content.ai_client import get_client
-from content.media import download_image_from_url, cleanup_media_file
+from content.perplexity_client import research_place, parse_research_json, is_configured as perplexity_configured
+from content import web_search
 from geo_agent import backend_client
 from geo_agent.translator import translate_content
 
 logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
+DAILY_LIMIT = 50
 
-SYSTEM_PROMPT_POI_RESEARCH = """Ти — досвідчений дослідник-мандрівник, який створює глибокі дослідження про конкретні місця.
 
-=== ЗАВДАННЯ ===
-Тобі надані РЕАЛЬНІ, ПЕРЕВІРЕНІ дані про конкретне місце з бази даних.
-Створи ГЛИБОКЕ ДОСЛІДЖЕННЯ цього місця, використовуючи ТІЛЬКИ надані факти.
-Доповни своїми загальновідомими знаннями про регіон/місто/країну (якщо впевнений).
+SUMMARIZE_SYSTEM_PROMPT = """You are a travel researcher. You are given web search results about a place.
+Create a structured JSON summary using ONLY information from the provided search results.
 
-=== СТРУКТУРА ДОСЛІДЖЕННЯ ===
-Створи JSON з такими полями:
+Return ONLY valid JSON:
 {
-  "summary": "Короткий опис місця (2-3 речення)",
-  "location_name": "Назва місця",
-  "country_code": "UA",
-  "history": [
-    {"period": "рік або період", "description": "що сталось"}
-  ],
-  "detailed_history": [
-    {"period": "I ст. н.е.", "description": "..."},
-    {"period": "V-IX ст.", "description": "..."},
-    {"period": "X-XIII ст.", "description": "..."},
-    {"period": "XIV-XVI ст.", "description": "..."},
-    {"period": "XVII-XVIII ст.", "description": "..."},
-    {"period": "XIX ст.", "description": "..."},
-    {"period": "XX ст.", "description": "..."},
-    {"period": "XXI ст.", "description": "..."}
-  ],
-  "places": [
-    {"name": "назва поруч", "type": "тип (city/museum/park/church/...)", "description": "що цікавого"}
-  ],
-  "regions": [
-    {"name": "Назва регіону/міста", "type": "region/city", "description": "коротко про регіон"}
-  ],
-  "news": [
-    {"title": "Заголовок", "description": "Про що", "source": "джерело"}
-  ],
-  "practical_info": {
-    "best_time": "найкращий час для відвідування",
-    "how_to_get": "як дістатися",
-    "budget": "приблизний бюджет",
-    "tips": ["порада 1", "порада 2"]
-  },
-  "cultural_context": "Культурний та історичний контекст місця в регіоні",
-  "nearby_attractions": ["Цікаве місце 1", "Цікаве місце 2"]
+  "summary": "2-3 sentence overview",
+  "history": "Historical background (if found in sources)",
+  "cuisine_info": "About the cuisine/food (if applicable)",
+  "person_info": "About the person the place is named after (if found)",
+  "cultural_context": "Cultural significance",
+  "practical_tips": "Tips for visitors",
+  "fun_facts": "Interesting facts from sources"
 }
 
-=== ПРАВИЛА ===
-1. ТІЛЬКИ українською мовою.
-2. НЕ вигадуй фактів — якщо не знаєш, не пиши.
-3. Історія: тільки те що ТОЧНО відомо. Краще менше але правдиво.
-4. detailed_history: детальна хронологія з нашої ери. Якщо це місто/країна — від античності до сучасності. Пропускай періоди яких не знаєш.
-5. regions: якщо це країна — перерахуй основні регіони/області. Якщо місто — основні райони. Якщо регіон — основні міста.
-6. news: якщо знаєш актуальні туристичні новини (фестивалі, відкриття, події) — додай. Якщо не знаєш — пусте [].
-7. places.type: обов'язково вкажи тип (city, region, island, museum, park, church, castle, beach тощо).
-8. Практична інфо: на основі наданих даних + загальновідомі факти.
-9. Поверни ТІЛЬКИ валідний JSON, нічого більше.
-
-=== ЗАБОРОНЕНО ===
-Росія, Білорусь, окуповані території, небезпечні зони.
-Якщо місце в забороненій зоні — поверни {"_rejected": true, "_reject_reason": "blocked territory"}."""
-
-
-def _format_poi_for_research(poi: backend_client.POIResearchTask) -> str:
-    """Format all POI data for the AI researcher."""
-    lines = [
-        "=== ДАНІ ПРО МІСЦЕ ===",
-        f"Назва: {poi.name}",
-        f"Тип: {poi.point_type.replace('_', ' ').title()}",
-        f"Місто: {poi.city}" if poi.city else "",
-        f"Країна: {poi.country_code.upper()}" if poi.country_code else "",
-        f"Координати: {poi.latitude:.6f}, {poi.longitude:.6f}",
-    ]
-
-    if poi.address:
-        lines.append(f"Адреса: {poi.address}")
-    if poi.phone:
-        lines.append(f"Телефон: {poi.phone}")
-    if poi.opening_hours:
-        lines.append(f"Години роботи: {poi.opening_hours}")
-    if poi.cuisine:
-        lines.append(f"Кухня: {poi.cuisine}")
-    if poi.website:
-        lines.append(f"Вебсайт: {poi.website}")
-    if poi.operator_name:
-        lines.append(f"Оператор: {poi.operator_name}")
-    if poi.founded_year and poi.founded_year > 0:
-        lines.append(f"Рік заснування: {poi.founded_year}")
-    if poi.rating and poi.rating > 0:
-        lines.append(f"Рейтинг: {poi.rating:.1f}")
-    if poi.description:
-        desc = poi.description[:1000]
-        lines.append(f"\nОпис (Wikipedia): {desc}")
-    if poi.wikipedia_url:
-        lines.append(f"Wikipedia: {poi.wikipedia_url}")
-
-    lines.append("=== КІНЕЦЬ ДАНИХ ===")
-    return "\n".join(l for l in lines if l)
-
-
-async def _generate_poi_research(poi: backend_client.POIResearchTask) -> dict | None:
-    """Generate deep research about a POI using AI."""
-    client = get_client()
-    poi_text = _format_poi_for_research(poi)
-
-    try:
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT_POI_RESEARCH},
-                {"role": "user", "content": poi_text},
-            ],
-            max_tokens=3000,
-            temperature=0.6,
-        )
-        raw = response.choices[0].message.content.strip()
-
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-        result = json.loads(raw)
-        if result.get("_rejected"):
-            logger.warning("[poi-researcher] AI rejected POI %d: %s", poi.point_id, result.get("_reject_reason"))
-            return None
-
-        result["location_name"] = result.get("location_name") or poi.name
-        return result
-
-    except (json.JSONDecodeError, Exception) as e:
-        logger.error("[poi-researcher] AI research failed for POI %d: %s", poi.point_id, e)
-        return None
+Rules:
+1. ONLY use facts from the provided search results — never invent
+2. If a field has no data in sources, set it to ""
+3. Write in Ukrainian language
+4. Include specific details: dates, names, numbers
+5. Return ONLY valid JSON"""
 
 
 async def process_poi_research() -> bool:
-    """Process one POI for research. Called by scheduler.
-
-    Returns True if a POI was processed, False otherwise.
-    """
+    """Process one POI for research. Called by scheduler every 5 min."""
     async with _lock:
         return await _process_poi_research_inner()
 
@@ -174,102 +67,210 @@ async def _process_poi_research_inner() -> bool:
     logger.info("[poi-researcher] Researching POI %d: %s (%s, %s)",
                 poi.point_id, poi.name, poi.city, poi.country_code)
 
-    result = await _generate_poi_research(poi)
-    if result is None:
+    blocks = await _research_poi(poi)
+    if not blocks:
         await backend_client.mark_poi_researched(poi.point_id, 0)
+        logger.info("[poi-researcher] POI %d: no research data found", poi.point_id)
         return True
 
-    content = json.dumps(result, ensure_ascii=False)
-    summary = result.get("summary", "")
-    location_name = result.get("location_name", poi.name)
-
-    source_lang = "uk"
-    try:
-        translations = await translate_content(
-            location_name[:200],
-            summary[:2000],
-            source_lang=source_lang,
-        )
-    except Exception as e:
-        logger.warning("[poi-researcher] Translation failed for POI %d: %s", poi.point_id, e)
-        translations = {source_lang: {"title": location_name, "description": summary}}
-
-    title = location_name or poi.name
-    parts = [summary] if summary else []
-
-    history_list = result.get("history", [])
-    if history_list and isinstance(history_list, list):
-        history_lines = [f"• {h.get('period', '')}: {h.get('description', '')}" for h in history_list[:5]]
-        parts.append("📜 Історія\n" + "\n".join(history_lines))
-
-    places_list = result.get("places", [])
-    if places_list and isinstance(places_list, list):
-        place_lines = [f"• {p.get('name', '')} — {p.get('description', '')}" for p in places_list[:5]]
-        parts.append("📍 Цікаві місця поруч\n" + "\n".join(place_lines))
-
-    practical = result.get("practical_info", {})
-    if practical:
-        pi_lines = []
-        if practical.get("best_time"):
-            pi_lines.append(f"🕐 Найкращий час: {practical['best_time']}")
-        if practical.get("how_to_get"):
-            pi_lines.append(f"🚗 Як дістатися: {practical['how_to_get']}")
-        if practical.get("budget"):
-            pi_lines.append(f"💰 Бюджет: {practical['budget']}")
-        tips = practical.get("tips", [])
-        if tips:
-            pi_lines.extend(f"💡 {t}" for t in tips[:3])
-        if pi_lines:
-            parts.append("ℹ️ Практична інформація\n" + "\n".join(pi_lines))
-
-    cultural = result.get("cultural_context", "")
-    if cultural:
-        parts.append(f"🏛️ Культурний контекст\n{cultural}")
-
-    description = "\n\n".join(parts) if parts else summary
-
-    image_path = None
-    if poi.image_url:
-        image_path = await download_image_from_url(poi.image_url)
-        if image_path:
-            logger.info("[poi-researcher] Real photo for POI %d: %s", poi.point_id, poi.image_url[:80])
-    if not image_path:
-        google_url = await backend_client.try_enrich_photo(poi.point_id)
-        if google_url:
-            image_path = await download_image_from_url(google_url)
-            if image_path:
-                logger.info("[poi-researcher] Google photo for POI %d: %s", poi.point_id, google_url[:80])
-    if not image_path:
-        logger.info("[poi-researcher] No photo for POI %d (wiki + google tried)", poi.point_id)
-
-    research_code = f"poi_{poi.point_id}_{poi.name[:20].replace(' ', '_')}"
+    translated_blocks = await _translate_blocks(blocks)
 
     try:
-        resp = await backend_client.create_research_event(
-            research_code=research_code,
-            title=title[:200],
-            description=description[:4000],
-            latitude=poi.latitude,
-            longitude=poi.longitude,
-            photo_path=image_path,
-            content_language=source_lang,
-            translations=translations,
-            point_id=poi.point_id,
-        )
-
-        cleanup_media_file(image_path)
-
-        event_id = resp.get("eventId", 0)
-        if resp.get("ok") and event_id:
-            await backend_client.mark_poi_researched(poi.point_id, event_id)
-            logger.info("[poi-researcher] POI %d researched → event %d", poi.point_id, event_id)
-        else:
-            await backend_client.mark_poi_researched(poi.point_id, 0)
-            logger.warning("[poi-researcher] Event creation response: %s", resp)
-
+        resp = await backend_client.submit_poi_research(poi.point_id, translated_blocks)
+        saved = resp.get("saved", 0)
+        logger.info("[poi-researcher] POI %d: submitted %d research blocks", poi.point_id, saved)
     except Exception as e:
-        cleanup_media_file(image_path)
+        logger.error("[poi-researcher] Failed to submit research for POI %d: %s", poi.point_id, e)
         await backend_client.mark_poi_researched(poi.point_id, 0)
-        logger.error("[poi-researcher] Event creation failed for POI %d: %s", poi.point_id, e)
 
     return True
+
+
+async def _research_poi(poi: backend_client.POIResearchTask) -> list[dict]:
+    """Research a POI using the web search fallback chain.
+
+    Returns a list of block dicts ready for submission.
+    """
+    research_data = None
+    sources: list[dict] = []
+    ai_provider = ""
+
+    # Strategy 1: Perplexity Sonar (best — has built-in web search + citations)
+    if perplexity_configured():
+        extra_ctx = ""
+        if poi.description:
+            extra_ctx = poi.description[:300]
+
+        result = await research_place(
+            name=poi.name,
+            city=poi.city,
+            country=poi.country_code,
+            point_type=poi.point_type,
+            extra_context=extra_ctx,
+        )
+        if result and result.content:
+            research_data = parse_research_json(result)
+            sources = [{"url": url, "title": "", "snippet": ""} for url in result.citations[:10]]
+            ai_provider = "perplexity"
+            logger.info("[poi-researcher] Perplexity found %d citations for POI %d",
+                        len(result.citations), poi.point_id)
+
+    # Strategy 2: Tavily/Brave search + GPT-4o-mini summarization
+    if research_data is None:
+        query = f"{poi.name} {poi.city} {poi.country_code}".strip()
+        search_resp = await web_search.search(query)
+
+        if search_resp and search_resp.results:
+            sources = [
+                {"url": r.url, "title": r.title, "snippet": r.content[:200]}
+                for r in search_resp.results
+            ]
+            ai_provider = f"{search_resp.provider}+gpt"
+
+            context = web_search.format_search_context(search_resp)
+            research_data = await _summarize_with_gpt(poi.name, poi.city, poi.point_type, context)
+            logger.info("[poi-researcher] %s found %d results for POI %d",
+                        search_resp.provider, len(search_resp.results), poi.point_id)
+
+    # Strategy 3: GPT-4o-mini knowledge only (lowest confidence)
+    if research_data is None:
+        research_data = await _gpt_knowledge_only(poi)
+        ai_provider = "gpt_only"
+        logger.info("[poi-researcher] Using GPT knowledge only for POI %d", poi.point_id)
+
+    if research_data is None:
+        return []
+
+    return _build_blocks(research_data, sources, ai_provider, poi)
+
+
+def _build_blocks(
+    data: dict,
+    sources: list[dict],
+    ai_provider: str,
+    poi: backend_client.POIResearchTask,
+) -> list[dict]:
+    """Convert research data dict into typed blocks for submission."""
+    blocks: list[dict] = []
+
+    has_sources = len(sources) > 0
+    base_confidence = 0.9 if ai_provider == "perplexity" else (0.7 if "gpt" in ai_provider and has_sources else 0.4)
+
+    field_map = {
+        "summary": ("summary", "Огляд"),
+        "history": ("history", "Історія"),
+        "cuisine_info": ("cuisine", "Кухня"),
+        "person_info": ("person", "Персона"),
+        "cultural_context": ("cultural", "Культурний контекст"),
+        "practical_tips": ("practical", "Практична інформація"),
+        "fun_facts": ("fun_facts", "Цікаві факти"),
+    }
+
+    for data_key, (block_type, default_title) in field_map.items():
+        content = data.get(data_key, "")
+        if not content or not isinstance(content, str) or len(content.strip()) < 20:
+            continue
+
+        blocks.append({
+            "blockType": block_type,
+            "title": default_title,
+            "content": content.strip(),
+            "sources": sources,
+            "aiProvider": ai_provider,
+            "confidence": base_confidence,
+        })
+
+    return blocks
+
+
+async def _summarize_with_gpt(name: str, city: str, point_type: str, search_context: str) -> dict | None:
+    """Summarize web search results using GPT-4o-mini."""
+    client = get_client()
+
+    user_prompt = (
+        f"Place: {name}, {city}\nType: {point_type.replace('_', ' ')}\n\n"
+        f"Web search results:\n{search_context}\n\n"
+        "Summarize the above search results into structured JSON about this place."
+    )
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SUMMARIZE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=2000,
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        return json.loads(raw)
+
+    except Exception as e:
+        logger.error("[poi-researcher] GPT summarization failed: %s", e)
+        return None
+
+
+async def _gpt_knowledge_only(poi: backend_client.POIResearchTask) -> dict | None:
+    """Last resort: use GPT knowledge without web search (lowest confidence)."""
+    client = get_client()
+
+    user_prompt = (
+        f"Place: {poi.name}\n"
+        f"City: {poi.city}\n"
+        f"Country: {poi.country_code}\n"
+        f"Type: {poi.point_type.replace('_', ' ')}\n"
+    )
+    if poi.description:
+        user_prompt += f"Existing description: {poi.description[:500]}\n"
+
+    user_prompt += (
+        "\nTell me what you know about this place. "
+        "Only include facts you are confident about."
+    )
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SUMMARIZE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=1500,
+            temperature=0.4,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        return json.loads(raw)
+
+    except Exception as e:
+        logger.error("[poi-researcher] GPT knowledge-only failed: %s", e)
+        return None
+
+
+async def _translate_blocks(blocks: list[dict]) -> list[dict]:
+    """Translate block content to 8 languages using the existing translator."""
+    for block in blocks:
+        title = block.get("title", "")
+        content = block.get("content", "")
+        if not content:
+            continue
+
+        try:
+            translations = await translate_content(
+                title[:200],
+                content[:2000],
+                source_lang="uk",
+            )
+            block["contentTranslations"] = translations
+        except Exception as e:
+            logger.warning("[poi-researcher] Translation failed for block %s: %s",
+                           block.get("blockType"), e)
+            block["contentTranslations"] = {}
+
+    return blocks

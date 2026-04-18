@@ -387,6 +387,21 @@ async def mark_poi_researched(point_id: int, research_event_id: int = 0) -> bool
         return resp.json().get("status") == "marked"
 
 
+async def submit_poi_research(point_id: int, blocks: list[dict]) -> dict:
+    """POST /v1/api/research/submit-poi-research — submit research blocks with sources."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/research/submit-poi-research",
+            headers=_headers(),
+            json={"pointId": point_id, "blocks": blocks},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # ── Airport research pipeline ──
 
 
