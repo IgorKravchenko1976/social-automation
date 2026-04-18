@@ -598,3 +598,52 @@ async def test_instagram():
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/backfill-event-links")
+async def trigger_backfill_event_links():
+    """One-time backfill: create backend events for all POI posts missing backend_event_id.
+
+    For each post, passes post.id as desiredEventId so that old social media links
+    (https://app.im-in.net/e/{post.id}) work if that event ID is free.
+    """
+    from sqlalchemy import select
+    from db.database import async_session
+    from db.models import Post
+    from content.poi_client import ensure_event_for_point
+
+    results = []
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(Post).where(
+                Post.source == "poi",
+                Post.poi_point_id.isnot(None),
+                Post.backend_event_id.is_(None),
+            )
+        )).scalars().all()
+
+        for post in rows:
+            eid = await ensure_event_for_point(post.poi_point_id, desired_event_id=post.id)
+            entry = {"post_id": post.id, "poi_point_id": post.poi_point_id}
+            if eid:
+                post.backend_event_id = eid
+                entry["backend_event_id"] = eid
+                entry["id_matched"] = (eid == post.id)
+            else:
+                entry["backend_event_id"] = None
+                entry["error"] = "ensure_event_for_point returned None"
+            results.append(entry)
+
+        await session.commit()
+
+    matched = sum(1 for r in results if r.get("id_matched"))
+    created = sum(1 for r in results if r.get("backend_event_id"))
+    return {
+        "status": "ok",
+        "total_posts": len(results),
+        "events_created": created,
+        "id_matched": matched,
+        "id_different": created - matched,
+        "failed": len(results) - created,
+        "details": results,
+    }

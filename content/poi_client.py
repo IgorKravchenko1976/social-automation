@@ -45,8 +45,11 @@ async def fetch_next_poi() -> Optional[dict]:
         return None
 
 
-async def ensure_event_for_point(point_id: int) -> int | None:
+async def ensure_event_for_point(point_id: int, desired_event_id: int | None = None) -> int | None:
     """Get or create a backend event for the given map_point.
+
+    If desired_event_id is provided and that ID is free in the backend,
+    the event will be created with that specific entity_id (for backfilling old posts).
 
     Returns the backend event ID (events.entity_id) or None on failure.
     """
@@ -58,10 +61,13 @@ async def ensure_event_for_point(point_id: int) -> int | None:
 
     url = f"{base}/v1/api/research/ensure-event-for-point"
     headers = {"X-Sync-Key": key}
+    params = {"pointId": str(point_id)}
+    if desired_event_id:
+        params["desiredEventId"] = str(desired_event_id)
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(url, headers=headers, params={"pointId": str(point_id)})
+            resp = await client.get(url, headers=headers, params=params)
             resp.raise_for_status()
             data = resp.json()
             event_id = data.get("eventId")
