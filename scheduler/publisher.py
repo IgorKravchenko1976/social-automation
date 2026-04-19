@@ -245,6 +245,9 @@ async def _prepare_publication_text(
         if post.poi_point_id and post.backend_event_id:
             app_link = f"https://app.im-in.net/e/{post.backend_event_id}"
             link_suffix += f"\n\n📲 Відкрити в I'M IN: {app_link}"
+        elif post.id:
+            blog_link = f"https://www.im-in.net/blog/post-{post.id}.html"
+            link_suffix += f"\n\n🌐 Детальніше: {blog_link}"
 
         if link_suffix:
             max_len = limits.get("max_text_length", 4096)
