@@ -229,6 +229,9 @@ def _ensure_link_suffix(post: Post, pub: Publication, platform: Platform) -> Non
     if post.poi_point_id and post.backend_event_id:
         app_link = f"https://app.im-in.net/e/{post.backend_event_id}"
         link_suffix = f"\n\n📲 Відкрити в I'M IN: {app_link}"
+    elif post.backend_event_id:
+        app_link = f"https://app.im-in.net/e/{post.backend_event_id}"
+        link_suffix = f"\n\n📲 Відкрити в I'M IN: {app_link}"
     elif post.id:
         blog_link = f"https://www.im-in.net/blog/post-{post.id}.html"
         link_suffix = f"\n\n🌐 Детальніше: {blog_link}"

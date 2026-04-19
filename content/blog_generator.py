@@ -154,8 +154,16 @@ def generate_post_html(
 
     safe_title = escape(title or "Новина")
     safe_content = escape(content or "")
+    import re as _re
+    def _linkify(text: str) -> str:
+        safe = escape(text)
+        return _re.sub(
+            r'(https?://[^\s<>&]+)',
+            r'<a href="\1" target="_blank" rel="noopener">\1</a>',
+            safe,
+        )
     content_paragraphs = "\n".join(
-        f"<p>{escape(line)}</p>" for line in (content or "").split("\n") if line.strip()
+        f"<p>{_linkify(line)}</p>" for line in (content or "").split("\n") if line.strip()
     )
     date_iso = _fmt_date(published_at)
     date_human = _fmt_date_human(published_at)
