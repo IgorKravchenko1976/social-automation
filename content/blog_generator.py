@@ -167,14 +167,30 @@ def generate_post_html(
     description = escape((content or "")[:160].replace("\n", " "))
 
     geo_html = ""
-    if latitude and longitude and backend_event_id:
-        app_link = _app_event_url(backend_event_id)
-        geo_html = f"""
-        <a class="post-geo" href="{escape(app_link)}" target="_blank" rel="noopener">
+    if latitude and longitude:
+        from urllib.parse import quote_plus
+        _place_label = escape(place_name or f"{latitude:.4f}, {longitude:.4f}")
+        _place_q = quote_plus(place_name or f"{latitude},{longitude}")
+
+        if backend_event_id:
+            app_link = _app_event_url(backend_event_id)
+            geo_html += f"""
+        <a class="post-geo post-map-app" href="{escape(app_link)}" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                 <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1118 0z"/><circle cx="12" cy="10" r="3"/>
             </svg>
-            {escape(place_name or f'{latitude:.4f}, {longitude:.4f}')}
+            {_place_label}
+        </a>"""
+
+        geo_html += f"""
+        <a class="post-geo post-map-google" href="https://www.google.com/maps/search/?api=1&query={latitude},{longitude}" target="_blank" rel="noopener nofollow">
+            Google Maps
+        </a>
+        <a class="post-geo post-map-osm" href="https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=16/{latitude}/{longitude}" target="_blank" rel="noopener nofollow">
+            OpenStreetMap
+        </a>
+        <a class="post-geo post-map-apple" href="https://maps.apple.com/?ll={latitude},{longitude}&q={_place_q}" target="_blank" rel="noopener nofollow">
+            Apple Maps
         </a>"""
 
     source_html = ""
@@ -368,6 +384,10 @@ def generate_post_html(
         }}
         .post-geo:hover, .post-source:hover {{ opacity: 0.75; }}
         .post-geo {{ background: #DBEAFE; color: #2563EB; }}
+        .post-map-app {{ background: #DBEAFE; color: #2563EB; }}
+        .post-map-google {{ background: #DCFCE7; color: #16A34A; }}
+        .post-map-osm {{ background: #FEF3C7; color: #D97706; }}
+        .post-map-apple {{ background: #F3F4F6; color: #4B5563; }}
         .post-source {{ background: #FEF3C7; color: #D97706; }}
         .post-footer {{
             background: var(--text-dark); padding: 2rem 0; text-align: center;
