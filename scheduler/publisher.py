@@ -215,6 +215,33 @@ async def _generate_and_verify_text(
 # Phase 1: Generate text + extract geo (no publishing yet)
 # ---------------------------------------------------------------------------
 
+def _ensure_link_suffix(post: Post, pub: Publication, platform: Platform) -> None:
+    """Append app deep link or blog fallback to publication text (idempotent)."""
+    if not pub.content_adapted:
+        return
+    limits = PLATFORM_LIMITS.get(platform, {})
+    if not limits.get("supports_links"):
+        return
+    if "app.im-in.net/e/" in pub.content_adapted or "im-in.net/blog/post-" in pub.content_adapted:
+        return
+
+    link_suffix = ""
+    if post.poi_point_id and post.backend_event_id:
+        app_link = f"https://app.im-in.net/e/{post.backend_event_id}"
+        link_suffix = f"\n\n📲 Відкрити в I'M IN: {app_link}"
+    elif post.id:
+        blog_link = f"https://www.im-in.net/blog/post-{post.id}.html"
+        link_suffix = f"\n\n🌐 Детальніше: {blog_link}"
+
+    if link_suffix:
+        max_len = limits.get("max_text_length", 4096)
+        if len(pub.content_adapted) + len(link_suffix) > max_len:
+            available = max_len - len(link_suffix) - 3
+            if available >= 80:
+                pub.content_adapted = pub.content_adapted[:available] + "..."
+        pub.content_adapted += link_suffix
+
+
 async def _prepare_publication_text(
     post: Post,
     pub: Publication,
@@ -224,39 +251,18 @@ async def _prepare_publication_text(
 
     Returns True if text is ready (or was already set), False if rejected.
     """
-    if pub.content_adapted:
-        return True
+    if not pub.content_adapted:
+        content_type = _detect_content_type(post)
+        text = await _generate_and_verify_text(post, platform, content_type)
+        if text is None:
+            pub.status = PostStatus.FAILED
+            pub.error_message = "Fact-check rejected all attempts"
+            post.log_pipeline("publish", "fail",
+                              f"{platform.value}: skipped — fact-check rejected text")
+            return False
+        pub.content_adapted = text
 
-    content_type = _detect_content_type(post)
-    text = await _generate_and_verify_text(post, platform, content_type)
-    if text is None:
-        pub.status = PostStatus.FAILED
-        pub.error_message = "Fact-check rejected all attempts"
-        post.log_pipeline("publish", "fail",
-                          f"{platform.value}: skipped — fact-check rejected text")
-        return False
-
-    pub.content_adapted = text
-
-    limits = PLATFORM_LIMITS.get(platform, {})
-    if limits.get("supports_links"):
-        link_suffix = ""
-
-        if post.poi_point_id and post.backend_event_id:
-            app_link = f"https://app.im-in.net/e/{post.backend_event_id}"
-            link_suffix += f"\n\n📲 Відкрити в I'M IN: {app_link}"
-        elif post.id:
-            blog_link = f"https://www.im-in.net/blog/post-{post.id}.html"
-            link_suffix += f"\n\n🌐 Детальніше: {blog_link}"
-
-        if link_suffix:
-            max_len = limits.get("max_text_length", 4096)
-            if len(pub.content_adapted) + len(link_suffix) > max_len:
-                available = max_len - len(link_suffix) - 3
-                if available >= 80:
-                    pub.content_adapted = pub.content_adapted[:available] + "..."
-            pub.content_adapted += link_suffix
-
+    _ensure_link_suffix(post, pub, platform)
     return True
 
 
