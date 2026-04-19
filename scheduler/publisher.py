@@ -592,6 +592,35 @@ async def _publish_scheduled_post_inner(time_slot: int) -> None:
 
         if queued_posts and topic_attempt == 0:
             post = queued_posts[0]
+            title_lower = (post.title or "").lower().strip()
+            place_lower = (post.place_name or "").lower().strip()
+            is_generic = (
+                post.source == "poi"
+                and title_lower
+                and (
+                    title_lower.startswith("monument")
+                    or title_lower.startswith("historic")
+                    or title_lower == place_lower
+                    or len(title_lower.split("—")[0].strip()) <= 3
+                )
+            )
+            if is_generic:
+                logger.warning(
+                    "=== PUBLISH === Skipping stale generic POI post_id=%d '%s' — marking QUEUED pubs as FAILED",
+                    post.id, (post.title or "")[:50],
+                )
+                async with async_session() as _sess:
+                    _stale = await _sess.execute(
+                        select(Publication).where(
+                            Publication.post_id == post.id,
+                            Publication.status == PostStatus.QUEUED,
+                        )
+                    )
+                    for _pub in _stale.scalars().all():
+                        _pub.status = PostStatus.FAILED
+                        _pub.error_message = "Stale generic POI — skipped"
+                    await _sess.commit()
+                continue
             logger.info("=== PUBLISH === Found pre-created post_id=%d, publishing it first", post.id)
         else:
             post = await create_single_post(content_type)
