@@ -257,43 +257,84 @@ async def create_daily_posts() -> None:
             )
 
 
+MAX_POI_SKIP_RETRIES = 5
+
+
+def _is_generic_poi_name(poi: dict) -> bool:
+    """Detect POIs where name is just the type (e.g., name='monument', type='monument').
+
+    These produce terrible AI content because there's no specific place info.
+    """
+    name = (poi.get("name") or "").strip().lower().replace("_", " ")
+    point_type = (poi.get("pointType") or "").strip().lower().replace("_", " ")
+    if not name or not point_type:
+        return False
+    if name == point_type:
+        return True
+    if len(name) <= 3:
+        return True
+    return False
+
+
 async def _create_poi_spotlight_post(session: AsyncSession) -> Optional[Post]:
     """Create a post from the richest available POI in our database.
 
     EDITORIAL GATE: POI must have a verifiable source (description from
     Wikipedia/OSM or a wikipediaUrl). Without a source we skip this POI
     and let the caller try the next one or fall back.
+
+    Retries up to MAX_POI_SKIP_RETRIES times when encountering generic/bad POIs.
     """
-    poi = await fetch_next_poi()
-    if not poi:
-        logger.warning("=== FRESH === No POI available, falling back to leisure_travel")
-        return None
+    for _skip_attempt in range(MAX_POI_SKIP_RETRIES):
+        poi = await fetch_next_poi()
+        if not poi:
+            logger.warning("=== FRESH === No POI available, falling back to leisure_travel")
+            return None
 
-    has_description = bool((poi.get("description") or "").strip())
-    has_wikipedia = bool((poi.get("wikipediaUrl") or "").strip())
-    has_website = bool((poi.get("website") or "").strip())
-
-    if not has_description and not has_wikipedia:
         point_id = poi.get("id")
-        logger.warning(
-            "=== FRESH === EDITORIAL SKIP: POI #%s '%s' has NO description and NO Wikipedia URL "
-            "— cannot create post without verifiable source. Marking as posted to avoid retry.",
-            point_id, poi.get("name", "")[:60],
-        )
-        if point_id:
-            await mark_poi_posted(point_id)
-        return None
+        poi_name = poi.get("name", "")[:60]
 
-    poi_rating = poi.get("rating", 0) or 0
-    if poi_rating > 0 and poi_rating < 3.0:
-        point_id = poi.get("id")
-        logger.warning(
-            "=== FRESH === EDITORIAL SKIP: POI #%s '%s' has LOW RATING %.1f "
-            "— not suitable for social post. Marking as posted to avoid retry.",
-            point_id, poi.get("name", "")[:60], poi_rating,
+        if _is_generic_poi_name(poi):
+            logger.warning(
+                "=== FRESH === EDITORIAL SKIP: POI #%s name='%s' is generic (same as type '%s') "
+                "— cannot create quality post. Marking as posted to skip.",
+                point_id, poi_name, poi.get("pointType"),
+            )
+            if point_id:
+                await mark_poi_posted(point_id)
+            continue
+
+        has_description = bool((poi.get("description") or "").strip())
+        has_wikipedia = bool((poi.get("wikipediaUrl") or "").strip())
+        has_website = bool((poi.get("website") or "").strip())
+
+        if not has_description and not has_wikipedia:
+            logger.warning(
+                "=== FRESH === EDITORIAL SKIP: POI #%s '%s' has NO description and NO Wikipedia URL "
+                "— cannot create post without verifiable source. Marking as posted to avoid retry.",
+                point_id, poi_name,
+            )
+            if point_id:
+                await mark_poi_posted(point_id)
+            continue
+
+        poi_rating = poi.get("rating", 0) or 0
+        if poi_rating > 0 and poi_rating < 3.0:
+            logger.warning(
+                "=== FRESH === EDITORIAL SKIP: POI #%s '%s' has LOW RATING %.1f "
+                "— not suitable for social post. Marking as posted to avoid retry.",
+                point_id, poi_name, poi_rating,
+            )
+            if point_id:
+                await mark_poi_posted(point_id)
+            continue
+
+        break
+    else:
+        logger.error(
+            "=== FRESH === Exhausted %d POI skip retries — all POIs were generic/bad",
+            MAX_POI_SKIP_RETRIES,
         )
-        if point_id:
-            await mark_poi_posted(point_id)
         return None
 
     poi_text = format_poi_for_ai(poi)
