@@ -438,10 +438,36 @@ _META_PATTERNS = [
 ]
 
 
+_OWN_DOMAINS = {"im-in.net", "www.im-in.net", "app.im-in.net"}
+
+
+def _strip_external_urls(text: str) -> str:
+    """Remove all URLs except our own domains from social post text.
+
+    External links (hotel sites, Wikipedia, etc.) belong on the blog page,
+    not in social posts. Keeps im-in.net links intact.
+    """
+    def _replace(m: re.Match) -> str:
+        url = m.group(0)
+        from urllib.parse import urlparse
+        try:
+            host = urlparse(url).hostname or ""
+        except Exception:
+            return ""
+        if any(host == d or host.endswith("." + d) for d in _OWN_DOMAINS):
+            return url
+        return ""
+
+    cleaned = re.sub(r'https?://[^\s<>\)]+', _replace, text)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned
+
+
 def clean_ai_meta(text: str) -> str:
-    """Strip AI apologies, refusals, and meta-commentary from generated posts."""
+    """Strip AI apologies, refusals, meta-commentary, and external URLs."""
     cleaned = text
     for pattern in _META_PATTERNS:
         cleaned = re.sub(pattern, "", cleaned)
+    cleaned = _strip_external_urls(cleaned)
     cleaned = cleaned.strip()
     return cleaned if cleaned else text
