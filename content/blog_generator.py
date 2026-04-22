@@ -478,7 +478,7 @@ def generate_post_html(
             var t = T[l] || T['uk'];
             document.getElementById('post-title').textContent = t.title;
             var body = document.getElementById('post-body');
-            body.innerHTML = t.content.split('\\n').filter(function(p){{ return p.trim(); }}).map(function(p){{ var s=document.createElement('span'); s.textContent=p; return '<p>'+s.innerHTML+'</p>'; }}).join('');
+            body.innerHTML = t.content.split('\\n').filter(function(p){{ return p.trim(); }}).map(function(p){{ var s=document.createElement('span'); s.textContent=p; var safe=s.innerHTML; var linked=safe.replace(/(https?:\\/\\/[^\\s<>&]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>'); return '<p>'+linked+'</p>'; }}).join('');
             document.getElementById('back-text').textContent = backLabels[l] || backLabels['uk'];
         }}
         document.querySelectorAll('[data-lang-btn]').forEach(function(btn) {{ btn.addEventListener('click', function() {{ setLang(btn.getAttribute('data-lang-btn')); }}); }});
