@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     brave_search_api_key: str = ""
 
+    # ElevenLabs Multilingual v2 TTS — voice narration for City Pulse cards.
+    # Bot reads city_event title+description, ElevenLabs returns MP3, we
+    # upload via backend to B2 (event-audio bucket).
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "9BWtsMINqrJLrRacOk9x"  # Aria — universal female
+    elevenlabs_model_id: str = "eleven_multilingual_v2"
+
     # Persistent data directory (mount Railway Volume here)
     data_dir: str = "/data"
 

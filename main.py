@@ -161,6 +161,97 @@ def _setup_scheduler() -> None:
                           id="region_research_queue", replace_existing=True)
         logger.info("[regions] Region research queue enabled — every 15 min")
 
+        # ── City Pulse — cultural events vertical (added April 2026) ──
+        from geo_agent.city_pulse import (
+            process_city_pulse_discover,
+            process_city_pulse_verify,
+            process_city_pulse_fetch,
+        )
+        from geo_agent.city_pulse_voice import process_city_pulse_voice
+
+        scheduler.add_job(process_city_pulse_discover, "interval", minutes=10,
+                          id="city_pulse_discover_queue", replace_existing=True)
+        scheduler.add_job(process_city_pulse_verify, "interval", minutes=4,
+                          id="city_pulse_verify_queue", replace_existing=True)
+        scheduler.add_job(process_city_pulse_fetch, "interval", minutes=6,
+                          id="city_pulse_fetch_queue", replace_existing=True)
+        scheduler.add_job(process_city_pulse_voice, "interval", minutes=3,
+                          id="city_pulse_voice_queue", replace_existing=True)
+        logger.info(
+            "[city-pulse] Discover/verify/fetch/voice loops scheduled "
+            "(discover=10m, verify=4m, fetch=6m, voice=3m)"
+        )
+
+        async def _weekly_build_verify_queue():
+            try:
+                result = await backend_client.trigger_city_pulse_build_verify_queue()
+                logger.info("[city-pulse] Weekly verify queue built: %s", result)
+            except Exception as exc:
+                logger.warning("[city-pulse] Weekly verify queue build failed: %s", exc)
+
+        scheduler.add_job(
+            _weekly_build_verify_queue,
+            CronTrigger(day_of_week="mon", hour=4, minute=0, timezone=tz),
+            id="city_pulse_build_verify_weekly", replace_existing=True,
+        )
+        logger.info("[city-pulse] Weekly verify queue rebuild every Monday at 04:00")
+
+        async def _daily_build_fetch_queue():
+            try:
+                result = await backend_client.trigger_city_pulse_build_fetch_queue()
+                logger.info("[city-pulse] Daily fetch queue built: %s", result)
+            except Exception as exc:
+                logger.warning("[city-pulse] Daily fetch queue build failed: %s", exc)
+
+        scheduler.add_job(
+            _daily_build_fetch_queue,
+            CronTrigger(hour=6, minute=15, timezone=tz),
+            id="city_pulse_build_fetch_daily", replace_existing=True,
+        )
+        logger.info("[city-pulse] Daily fetch queue rebuild at 06:15")
+
+        async def _nightly_archive_expired():
+            try:
+                result = await backend_client.trigger_city_pulse_archive_expired()
+                logger.info("[city-pulse] Archived expired events: %s", result)
+            except Exception as exc:
+                logger.warning("[city-pulse] Archive expired failed: %s", exc)
+
+        scheduler.add_job(
+            _nightly_archive_expired,
+            CronTrigger(hour=2, minute=30, timezone=tz),
+            id="city_pulse_archive_nightly", replace_existing=True,
+        )
+        logger.info("[city-pulse] Nightly archive of expired events at 02:30")
+
+        async def _daily_collective_interests():
+            try:
+                result = await backend_client.trigger_city_pulse_collective_interests(threshold=3)
+                logger.info("[city-pulse] Group interest aggregation: %s", result)
+            except Exception as exc:
+                logger.warning("[city-pulse] Group interest aggregation failed: %s", exc)
+
+        scheduler.add_job(
+            _daily_collective_interests,
+            CronTrigger(hour=18, minute=30, timezone=tz),
+            id="city_pulse_collective_interests_daily", replace_existing=True,
+        )
+        logger.info("[city-pulse] Daily group-interest aggregation at 18:30")
+
+        async def _weekly_auto_discover():
+            try:
+                result = await backend_client.trigger_city_pulse_auto_discover(max_cities=5)
+                logger.info("[city-pulse] Auto-discover scan: %s", result)
+            except Exception as exc:
+                logger.warning("[city-pulse] Auto-discover failed: %s", exc)
+
+        scheduler.add_job(
+            _weekly_auto_discover,
+            CronTrigger(day_of_week="tue", hour=5, minute=0, timezone=tz),
+            id="city_pulse_auto_discover_weekly", replace_existing=True,
+        )
+        logger.info("[city-pulse] Weekly auto-discover scan every Tuesday at 05:00")
+
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
 

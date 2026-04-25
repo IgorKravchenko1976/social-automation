@@ -822,3 +822,414 @@ async def submit_fix_research(
         )
         resp.raise_for_status()
         return resp.json().get("ok", False)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# City Pulse — cultural events vertical (added April 2026).
+#
+# Three job types feed it:
+#   discover_sources : Perplexity-powered hunt for cinema/theater/concert
+#                      websites & APIs in a given city.
+#   verify_source    : weekly HEAD + parse check; updates reliability_score.
+#   fetch_content    : daily RSS / iCal / sitemap parse → GPT-4o-mini
+#                      normalization → upsert into city_events.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class CityPulseSource:
+    id: int
+    name: str
+    homepage_url: str
+    feed_url: str
+    api_endpoint: str
+    source_type: str
+    categories: list
+    status: str
+    reliability_score: float
+    language: str
+    fetch_config: dict
+    country_code: str
+    city: str
+
+
+@dataclass
+class CityPulseJob:
+    id: int
+    job_type: str
+    country_code: str
+    city: str
+    source_id: int | None
+    source: CityPulseSource | None
+    priority: float
+    attempt_count: int
+    payload: dict
+
+
+async def fetch_next_city_pulse_job(job_type: str | None = None) -> CityPulseJob | None:
+    """GET /v1/api/city-pulse/next-job — pull the next pending job.
+
+    job_type filter is optional; without it the bot processes whatever's hot.
+    """
+    if not is_configured():
+        return None
+
+    params = {}
+    if job_type:
+        params["type"] = job_type
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/city-pulse/next-job",
+            headers=_headers(),
+            params=params,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    if data.get("empty"):
+        return None
+
+    src_data = data.get("source")
+    src = None
+    if src_data:
+        src = CityPulseSource(
+            id=src_data.get("id", 0),
+            name=src_data.get("name", ""),
+            homepage_url=src_data.get("homepageUrl", ""),
+            feed_url=src_data.get("feedUrl", ""),
+            api_endpoint=src_data.get("apiEndpoint", ""),
+            source_type=src_data.get("sourceType", ""),
+            categories=src_data.get("categories", []),
+            status=src_data.get("status", ""),
+            reliability_score=src_data.get("reliabilityScore", 0.0),
+            language=src_data.get("language", ""),
+            fetch_config=src_data.get("fetchConfig") or {},
+            country_code=src_data.get("countryCode", ""),
+            city=src_data.get("city", ""),
+        )
+
+    return CityPulseJob(
+        id=data.get("id", 0),
+        job_type=data.get("jobType", ""),
+        country_code=data.get("countryCode", ""),
+        city=data.get("city", ""),
+        source_id=data.get("sourceId"),
+        source=src,
+        priority=data.get("priority", 0.0),
+        attempt_count=data.get("attemptCount", 0),
+        payload=data.get("payload") or {},
+    )
+
+
+async def submit_sources_discovered(
+    job_id: int,
+    country_code: str,
+    city: str,
+    sources: list[dict],
+    failed: bool = False,
+    error: str = "",
+) -> dict:
+    """POST /v1/api/city-pulse/sources-discovered — return discovered sources.
+
+    Each source dict should contain at minimum: name, homepageUrl, sourceType,
+    categories. Optional: feedUrl, apiEndpoint, language, notes, fetchConfig.
+    """
+    if not is_configured():
+        return {"error": "not configured"}
+
+    payload = {
+        "jobId": job_id,
+        "countryCode": country_code,
+        "city": city,
+        "sources": sources,
+        "failed": failed,
+    }
+    if error:
+        payload["error"] = error
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/sources-discovered",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def submit_source_verified(
+    job_id: int,
+    source_id: int,
+    *,
+    http_status: int,
+    parse_ok: bool,
+    new_events_found: int = 0,
+    total_events_seen: int = 0,
+    duration_ms: int = 0,
+    error_message: str = "",
+) -> dict:
+    """POST /v1/api/city-pulse/source-verified — submit weekly check result."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    payload = {
+        "jobId": job_id,
+        "sourceId": source_id,
+        "httpStatus": http_status,
+        "parseOk": parse_ok,
+        "newEventsFound": new_events_found,
+        "totalEventsSeen": total_events_seen,
+        "durationMs": duration_ms,
+        "errorMessage": error_message,
+    }
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/source-verified",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def submit_events_imported(
+    job_id: int,
+    source_id: int,
+    events: list[dict],
+    failed: bool = False,
+    error: str = "",
+) -> dict:
+    """POST /v1/api/city-pulse/events-imported — upsert parsed events.
+
+    Each event dict shape (camelCase to match Go handler):
+      externalId, title, description, contentLanguage, translations,
+      category, startsAt, endsAt, schedule, venueName, venueAddress,
+      latitude, longitude, priceFrom, priceTo, currency, ticketUrl,
+      thumbnailUrl, photos, ageLimit, spokenLanguage, meta.
+
+    Backend dedups by (sourceId, externalId).
+    """
+    if not is_configured():
+        return {"error": "not configured"}
+
+    payload = {
+        "jobId": job_id,
+        "sourceId": source_id,
+        "events": events,
+        "failed": failed,
+    }
+    if error:
+        payload["error"] = error
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/events-imported",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_city_pulse_build_verify_queue() -> dict:
+    """POST /v1/api/city-pulse/build-verify-queue — enqueue weekly checks."""
+    if not is_configured():
+        return {"error": "not configured"}
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/build-verify-queue",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_city_pulse_build_fetch_queue() -> dict:
+    """POST /v1/api/city-pulse/build-fetch-queue — enqueue daily content fetch."""
+    if not is_configured():
+        return {"error": "not configured"}
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/build-fetch-queue",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+@dataclass
+class CityPulseVoiceJob:
+    """One pending narration task pulled from the backend."""
+    id: int
+    content_language: str
+    translations: dict
+    title: str
+    description: str
+    category: str
+    venue_name: str
+    city: str
+    country_code: str
+    starts_at: str | None
+
+
+async def fetch_pending_voice_jobs(lang: str, limit: int = 5) -> list[CityPulseVoiceJob]:
+    """GET /v1/api/city-pulse/pending-voice — events needing narration in `lang`.
+
+    Backend returns events where:
+      - audio_status IN ('pending', 'failed')
+      - audio_urls does NOT contain `lang`
+      - either content_language = lang OR translations have `lang` entry
+    """
+    if not is_configured():
+        return []
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/city-pulse/pending-voice",
+            headers=_headers(),
+            params={"lang": lang, "limit": str(limit)},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    out: list[CityPulseVoiceJob] = []
+    for j in data.get("jobs", []):
+        out.append(CityPulseVoiceJob(
+            id=j.get("id", 0),
+            content_language=j.get("contentLanguage", ""),
+            translations=j.get("translations") or {},
+            title=j.get("title", ""),
+            description=j.get("description", ""),
+            category=j.get("category", ""),
+            venue_name=j.get("venueName", ""),
+            city=j.get("city", ""),
+            country_code=j.get("countryCode", ""),
+            starts_at=j.get("startsAt"),
+        ))
+    return out
+
+
+async def upload_voice(
+    city_event_id: int,
+    lang: str,
+    audio_bytes: bytes,
+    content_type: str = "audio/mpeg",
+) -> dict:
+    """POST /v1/api/city-pulse/voice-uploaded — backend stores in B2.
+
+    Returns {url, lang, cityEventId} on success. The url is presigned for
+    1 hour but the backend keeps it in audio_urls for re-presigning later.
+    """
+    if not is_configured():
+        return {"error": "not configured"}
+
+    files = {
+        "audio": (f"{lang}.mp3", audio_bytes, content_type),
+    }
+    data = {
+        "cityEventId": str(city_event_id),
+        "lang": lang,
+    }
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/voice-uploaded",
+            headers=_headers(),  # X-Sync-Key only; no Content-Type — let httpx set multipart
+            data=data,
+            files=files,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def submit_voice_failed(city_event_id: int, reason: str) -> dict:
+    """POST /v1/api/city-pulse/voice-failed — record TTS failure."""
+    if not is_configured():
+        return {"error": "not configured"}
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/voice-failed",
+            headers=_headers(),
+            json={"cityEventId": city_event_id, "reason": reason},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_city_pulse_auto_discover(max_cities: int = 5) -> dict:
+    """POST /v1/api/city-pulse/auto-discover — find new active cities w/o sources.
+
+    Run weekly. Backend picks cities where ≥3 distinct users browsed POIs in
+    the last 14 days but City Pulse has no sources yet, then enqueues
+    discover_sources jobs for them.
+    """
+    if not is_configured():
+        return {"error": "not configured"}
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/auto-discover",
+            headers=_headers(),
+            params={"max": str(max_cities)},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_city_pulse_collective_interests(threshold: int = 3) -> dict:
+    """POST /v1/api/city-pulse/collective-interests — fan out group pushes.
+
+    Returns {matched, triggered, threshold}.
+    """
+    if not is_configured():
+        return {"error": "not configured"}
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/collective-interests",
+            headers=_headers(),
+            params={"threshold": str(threshold)},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_city_pulse_archive_expired() -> dict:
+    """POST /v1/api/city-pulse/archive-expired — archive past events."""
+    if not is_configured():
+        return {"error": "not configured"}
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/archive-expired",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def trigger_city_pulse_enqueue_discover(
+    country_code: str,
+    city: str,
+    *,
+    region_id: int | None = None,
+    priority: float = 0.0,
+) -> dict:
+    """POST /v1/api/city-pulse/enqueue-discover — seed a city for source hunt."""
+    if not is_configured():
+        return {"error": "not configured"}
+    payload = {
+        "countryCode": country_code,
+        "city": city,
+        "priority": priority,
+    }
+    if region_id is not None:
+        payload["regionId"] = region_id
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/enqueue-discover",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()

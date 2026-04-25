@@ -294,6 +294,126 @@ async def trigger_airport_process():
         return {"status": "error", "error": str(e)}
 
 
+# ── City Pulse — cultural events vertical (April 2026) ──
+
+@router.post("/trigger/city-pulse-discover")
+async def trigger_city_pulse_discover():
+    """Run one discover_sources cycle (Perplexity hunt for one queued city)."""
+    from geo_agent.city_pulse import process_city_pulse_discover
+    try:
+        ok = await process_city_pulse_discover()
+        return {"status": "ok", "processed": ok}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-verify")
+async def trigger_city_pulse_verify():
+    """Run one verify_source cycle (HEAD + parse for one source)."""
+    from geo_agent.city_pulse import process_city_pulse_verify
+    try:
+        ok = await process_city_pulse_verify()
+        return {"status": "ok", "processed": ok}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-fetch")
+async def trigger_city_pulse_fetch():
+    """Run one fetch_content cycle (RSS/iCal/HTML → events for one source)."""
+    from geo_agent.city_pulse import process_city_pulse_fetch
+    try:
+        ok = await process_city_pulse_fetch()
+        return {"status": "ok", "processed": ok}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-voice")
+async def trigger_city_pulse_voice():
+    """Run one voice-generation cycle (ElevenLabs TTS → B2 → city_events.audio_urls)."""
+    from geo_agent.city_pulse_voice import process_city_pulse_voice
+    try:
+        ok = await process_city_pulse_voice()
+        return {"status": "ok", "processed": ok}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-build-fetch-queue")
+async def trigger_city_pulse_build_fetch_queue():
+    """Build daily fetch queue (active sources fetched > 12h ago)."""
+    from geo_agent.backend_client import trigger_city_pulse_build_fetch_queue
+    try:
+        result = await trigger_city_pulse_build_fetch_queue()
+        return {"status": "ok", **result} if isinstance(result, dict) else {"status": "ok", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-build-verify-queue")
+async def trigger_city_pulse_build_verify_queue():
+    """Build weekly verify queue (sources not checked in 6 days)."""
+    from geo_agent.backend_client import trigger_city_pulse_build_verify_queue
+    try:
+        result = await trigger_city_pulse_build_verify_queue()
+        return {"status": "ok", **result} if isinstance(result, dict) else {"status": "ok", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-enqueue-discover")
+async def trigger_city_pulse_enqueue_discover(
+    country_code: str, city: str, region_id: int | None = None, priority: float = 0.0,
+):
+    """Seed a (country, city) for source discovery. Used to onboard new cities."""
+    from geo_agent.backend_client import trigger_city_pulse_enqueue_discover
+    try:
+        result = await trigger_city_pulse_enqueue_discover(
+            country_code, city, region_id=region_id, priority=priority,
+        )
+        return {"status": "ok", **result} if isinstance(result, dict) else {"status": "ok", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-archive-expired")
+async def trigger_city_pulse_archive_expired():
+    """Archive city events that ended more than 7 days ago."""
+    from geo_agent.backend_client import trigger_city_pulse_archive_expired
+    try:
+        result = await trigger_city_pulse_archive_expired()
+        return {"status": "ok", **result} if isinstance(result, dict) else {"status": "ok", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/trigger/city-pulse-seed-pilot-cities")
+async def trigger_city_pulse_seed_pilot_cities():
+    """One-shot: enqueue discover_sources for the pilot cities.
+
+    Use right after deploying City Pulse for the first time. Kyiv leads
+    because it's the home market — the rest mirror the datacollector
+    dataset (Paris, Istanbul, Barcelona, Rome).
+    """
+    from geo_agent.backend_client import trigger_city_pulse_enqueue_discover
+    pilots = [
+        ("UA", "Kyiv", 1.0),       # домашній ринок — найвищий пріоритет
+        ("FR", "Paris", 0.95),
+        ("TR", "Istanbul", 0.85),
+        ("ES", "Barcelona", 0.85),
+        ("IT", "Rome", 0.85),
+    ]
+    results = []
+    for cc, city, prio in pilots:
+        try:
+            result = await trigger_city_pulse_enqueue_discover(cc, city, priority=prio)
+            results.append({"city": f"{city}, {cc}", "result": result})
+        except Exception as e:
+            results.append({"city": f"{city}, {cc}", "error": str(e)})
+    return {"status": "ok", "queued": results}
+
+
 @router.post("/trigger/health-check")
 async def trigger_health_check():
     from scheduler.health_check import run_health_check
