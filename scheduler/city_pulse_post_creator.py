@@ -1,0 +1,327 @@
+"""City Pulse — auto-publish imported cultural events to TG/FB/IG.
+
+Polls imin-backend's /v1/api/city-pulse/next-city-event-for-post every
+5 minutes and creates a Post + Publication rows for the next available
+Kyiv event. The existing publisher.py picks them up on its normal cycle
+and dispatches to Telegram, Facebook, Instagram in parallel.
+
+One event = one post (one-shot, deduplicated by posted_to_social_at on
+the backend). Publication is in Ukrainian primarily; translations.en is
+embedded as a second paragraph for FB/IG which have international
+audiences.
+
+Editorial gates baked into the backend SELECT:
+  - is_pending_review = false (skip events from new sources awaiting approval)
+  - posted_to_social_at IS NULL (one-shot per event)
+  - starts_at IS NULL OR > now() (skip past events)
+
+Bot-side gates here:
+  - Skip if title or description is too short
+  - Skip if the only language available is non-Ukrainian (leave to fixer)
+
+The 5-minute interval gives natural pacing (1 event per cycle = 12
+posts/hour max). Realistic volume is much lower since the bot processes
+1 event at a time.
+"""
+from __future__ import annotations
+
+import asyncio
+import json as _json
+import logging
+from typing import Any, Optional
+
+import httpx
+
+from config.platforms import configured_platforms
+from config.settings import settings
+from db.database import async_session
+from db.models import Post, Publication
+
+logger = logging.getLogger(__name__)
+
+_lock = asyncio.Lock()
+ALL_PLATFORMS = configured_platforms()
+
+# Backend base + sync key are reused from settings — same auth as other
+# /research/* and /city-pulse/* endpoints in the bot.
+REQUEST_TIMEOUT = 30
+
+
+def _backend_configured() -> bool:
+    return bool(settings.imin_backend_api_base and settings.imin_backend_sync_key)
+
+
+def _backend_headers() -> dict[str, str]:
+    return {"X-Sync-Key": settings.imin_backend_sync_key}
+
+
+def _backend_base() -> str:
+    return settings.imin_backend_api_base.rstrip("/")
+
+
+# ── Backend client ──────────────────────────────────────────────
+
+async def _fetch_next_city_event(country_code: str = "UA", city: str = "Kyiv") -> Optional[dict]:
+    """GET /v1/api/city-pulse/next-city-event-for-post."""
+    if not _backend_configured():
+        return None
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_backend_base()}/v1/api/city-pulse/next-city-event-for-post",
+            headers=_backend_headers(),
+            params={"country_code": country_code, "city": city},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if data.get("empty"):
+        return None
+    return data
+
+
+async def _mark_city_event_posted(
+    city_event_id: int,
+    *,
+    social_post_id: Optional[int] = None,
+    blog_html_path: str = "",
+    failed: bool = False,
+    error: str = "",
+) -> dict:
+    """POST /v1/api/city-pulse/mark-city-event-posted."""
+    if not _backend_configured():
+        return {}
+    payload: dict[str, Any] = {"cityEventId": city_event_id}
+    if social_post_id:
+        payload["socialPostId"] = social_post_id
+    if blog_html_path:
+        payload["blogHtmlPath"] = blog_html_path
+    if failed:
+        payload["failed"] = True
+        payload["error"] = error[:200]
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_backend_base()}/v1/api/city-pulse/mark-city-event-posted",
+            headers=_backend_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ── Post text builder ──────────────────────────────────────────
+
+CATEGORY_EMOJI = {
+    "cinema": "🎬",
+    "theater": "🎭",
+    "concert": "🎵",
+    "exhibition": "🎨",
+    "sale": "🏷️",
+    "festival": "🎉",
+    "workshop": "🛠️",
+    "tour": "🧭",
+}
+
+
+def _format_city_event_for_post(event: dict) -> tuple[str, str]:
+    """Build (title, content_raw) for the Post row.
+
+    Uses translations.uk if available, otherwise the source-language fields.
+    Format follows the existing POI post pattern — facts only, no fluff.
+    Publisher.py later runs AI on this text to adapt per platform.
+
+    Returns (title_short, content_full).
+    """
+    translations = event.get("translations") or {}
+    if isinstance(translations, str):
+        try:
+            translations = _json.loads(translations)
+        except Exception:
+            translations = {}
+
+    uk = translations.get("uk") if isinstance(translations, dict) else None
+    if isinstance(uk, dict) and uk.get("title"):
+        title = uk.get("title", "").strip()
+        description = (uk.get("description") or "").strip()
+    else:
+        # Fallback to source-language fields (often English from Perplexity).
+        title = (event.get("title") or "").strip()
+        description = (event.get("description") or "").strip()
+
+    category = (event.get("category") or "").lower()
+    emoji = CATEGORY_EMOJI.get(category, "📍")
+    venue = (event.get("venueName") or "").strip()
+    address = (event.get("venueAddress") or "").strip()
+    starts_at = event.get("startsAt") or ""
+
+    # Prices block (only when at least one bound is present).
+    price_line = ""
+    pf = event.get("priceFrom")
+    pt = event.get("priceTo")
+    cur = event.get("currency") or ""
+    if pf is not None and pt is not None and pf != pt:
+        price_line = f"💳 {pf}–{pt} {cur}".strip()
+    elif pf is not None or pt is not None:
+        v = pf if pf is not None else pt
+        price_line = f"💳 від {v} {cur}".strip()
+
+    ticket_url = (event.get("ticketUrl") or "").strip()
+    city_event_id = event.get("id")
+    app_link = f"https://app.im-in.net/pulse/{city_event_id}" if city_event_id else ""
+
+    parts: list[str] = []
+    parts.append(f"{emoji} {title}")
+    if description:
+        parts.append(description)
+
+    venue_line = ""
+    if venue and address:
+        venue_line = f"📍 {venue}, {address}"
+    elif venue:
+        venue_line = f"📍 {venue}"
+    if venue_line:
+        parts.append(venue_line)
+
+    if starts_at:
+        parts.append(f"🕒 {starts_at[:16].replace('T', ' ')}")
+
+    if price_line:
+        parts.append(price_line)
+
+    if ticket_url:
+        parts.append(f"🎟 Квитки: {ticket_url}")
+
+    if app_link:
+        parts.append(f"📲 Деталі в I'M IN: {app_link}")
+
+    parts.append("\n📋 Дані: City Pulse / kontramarka.ua / concert.ua")
+    parts.append("#Афіша #Київ")
+
+    content = "\n\n".join(p for p in parts if p)
+    return title[:200], content
+
+
+# ── Main entry point ──────────────────────────────────────────
+
+async def process_city_pulse_post(country_code: str = "UA", city: str = "Kyiv") -> bool:
+    """One cycle: pull → make Post → mark posted on backend.
+
+    Returns True if a post was created, False otherwise. Designed to run
+    every 5 minutes via APScheduler. Existing publisher.py loop processes
+    the resulting Publication rows on its own cadence.
+    """
+    async with _lock:
+        if not _backend_configured():
+            logger.debug("[city-pulse-post] backend not configured")
+            return False
+
+        try:
+            event = await _fetch_next_city_event(country_code, city)
+        except Exception as exc:
+            logger.warning("[city-pulse-post] fetch failed: %s", exc)
+            return False
+
+        if not event:
+            logger.debug("[city-pulse-post] no events queued for %s/%s", country_code, city)
+            return False
+
+        city_event_id = event.get("id")
+        if not city_event_id:
+            logger.warning("[city-pulse-post] event missing id: %s", event)
+            return False
+
+        title, content = _format_city_event_for_post(event)
+        if len(title) < 5 or len(content) < 50:
+            logger.warning(
+                "[city-pulse-post] event %d: text too short (title=%d, content=%d), skipping",
+                city_event_id, len(title), len(content),
+            )
+            try:
+                await _mark_city_event_posted(
+                    city_event_id, failed=True, error="text_too_short")
+            except Exception:
+                pass
+            return False
+
+        # Download the source-supplied thumbnail if available. We never use
+        # Pexels/DALL-E for city events (same Le Montclair guard as POI) —
+        # better text-only than a fake image. publisher.py respects this
+        # via the source check.
+        image_path: Optional[str] = None
+        thumb_url = (event.get("thumbnailUrl") or "").strip()
+        if thumb_url:
+            try:
+                from content.media import download_image_from_url
+                image_path = await download_image_from_url(thumb_url)
+            except Exception as exc:
+                logger.warning(
+                    "[city-pulse-post] thumbnail download failed for event %d: %s",
+                    city_event_id, exc,
+                )
+
+        post_id: Optional[int] = None
+        try:
+            async with async_session() as session:
+                post = Post(
+                    title=title,
+                    content_raw=content,
+                    source="city_pulse",
+                    source_url=event.get("ticketUrl") or "",
+                    image_path=image_path,
+                    latitude=event.get("latitude"),
+                    longitude=event.get("longitude"),
+                    place_name=(event.get("venueName") or "")[:500],
+                    poi_point_id=city_event_id,  # repurposed: stores city_events.id when source='city_pulse'
+                )
+                post.log_pipeline(
+                    "topic", "ok",
+                    f"city event #{city_event_id}: {title[:80]} ({city})",
+                )
+
+                session.add(post)
+                await session.flush()
+
+                for platform in ALL_PLATFORMS:
+                    session.add(Publication(post_id=post.id, platform=platform.value))
+
+                # Translations come pre-baked from city_events.translations
+                translations = event.get("translations") or {}
+                if isinstance(translations, str):
+                    try:
+                        translations = _json.loads(translations)
+                    except Exception:
+                        translations = {}
+                if translations:
+                    post.translations = _json.dumps(translations, ensure_ascii=False)
+
+                await session.commit()
+                post_id = post.id
+
+            logger.info(
+                "[city-pulse-post] event %d → post %d (title=%s)",
+                city_event_id, post_id, title[:60],
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "[city-pulse-post] failed to create post for event %d: %s",
+                city_event_id, exc,
+            )
+            try:
+                await _mark_city_event_posted(
+                    city_event_id, failed=True, error=str(exc)[:200])
+            except Exception:
+                pass
+            return False
+
+        # Mark on backend so we never repost. If this fails, the same event
+        # could be picked up again — the unique index in DB still prevents
+        # duplicate INSERTs but we'd waste an AI/translation call. Acceptable
+        # trade-off for now.
+        try:
+            await _mark_city_event_posted(city_event_id, social_post_id=post_id)
+        except Exception as exc:
+            logger.warning(
+                "[city-pulse-post] mark-posted failed for event %d: %s",
+                city_event_id, exc,
+            )
+
+        return True

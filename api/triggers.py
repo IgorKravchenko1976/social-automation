@@ -340,6 +340,17 @@ async def trigger_city_pulse_voice():
         return {"status": "error", "error": str(e)}
 
 
+@router.post("/trigger/city-pulse-post")
+async def trigger_city_pulse_post(country_code: str = "UA", city: str = "Kyiv"):
+    """Run one city-pulse-post cycle (queue Post + Publications for one event)."""
+    from scheduler.city_pulse_post_creator import process_city_pulse_post
+    try:
+        ok = await process_city_pulse_post(country_code=country_code, city=city)
+        return {"status": "ok", "processed": ok, "country_code": country_code, "city": city}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 @router.post("/trigger/city-pulse-build-fetch-queue")
 async def trigger_city_pulse_build_fetch_queue():
     """Build daily fetch queue (active sources fetched > 12h ago)."""

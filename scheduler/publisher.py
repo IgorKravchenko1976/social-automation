@@ -434,17 +434,21 @@ async def _try_publish_post(
         if not image_path:
             place = post.place_name or ""
 
-            if post.source == "poi":
-                # POI posts: NEVER use Pexels/DALL-E — these return random
-                # unrelated images (e.g. Pexels "Le Montclair" → museum in NJ).
-                # Better no photo than a WRONG photo.
+            if post.source in ("poi", "city_pulse"):
+                # POI and City Pulse posts: NEVER use Pexels/DALL-E — these
+                # return random unrelated images (e.g. Pexels "Le Montclair"
+                # → museum in NJ). Better no photo than a WRONG photo.
+                # If the source supplied a real thumbnail it lives in
+                # post.image_path already; otherwise we ship text-only.
                 logger.info(
-                    "=== PUBLISH === POI post_id=%d has no real photo — "
-                    "publishing WITHOUT image (Pexels/DALL-E disabled for POI)",
-                    post.id,
+                    "=== PUBLISH === %s post_id=%d has no real photo — "
+                    "publishing WITHOUT image (Pexels/DALL-E disabled)",
+                    post.source, post.id,
                 )
-                post.log_pipeline("image", "skip",
-                                  "No real POI photo; Pexels/DALL-E disabled for POI posts")
+                post.log_pipeline(
+                    "image", "skip",
+                    f"No real {post.source} photo; Pexels/DALL-E disabled",
+                )
             else:
                 query = f"{place} landmark" if place else "travel landscape"
                 image_path = await get_image_for_post(
@@ -482,11 +486,16 @@ async def _try_publish_post(
                 continue
             platform = Platform(pub.platform)
 
-            if platform == Platform.INSTAGRAM and not image_path and post.source == "poi":
+            if platform == Platform.INSTAGRAM and not image_path and post.source in ("poi", "city_pulse"):
                 pub.status = PostStatus.FAILED
-                pub.error_message = "POI post has no real photo; Instagram requires image; Pexels/DALL-E disabled for POI"
-                post.log_pipeline("publish", "skip",
-                                  f"{platform.value}: skipped — no real photo for POI, Instagram needs image")
+                pub.error_message = (
+                    f"{post.source} post has no real photo; Instagram requires image; "
+                    "Pexels/DALL-E disabled for these sources"
+                )
+                post.log_pipeline(
+                    "publish", "skip",
+                    f"{platform.value}: skipped — no real photo for {post.source}, IG needs image",
+                )
                 logger.info(
                     "=== PUBLISH === Skipping Instagram for POI post_id=%d — no real photo available",
                     post.id,
