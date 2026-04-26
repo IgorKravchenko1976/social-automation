@@ -414,28 +414,46 @@ Category mapping cheat sheet (when source content is in Ukrainian / English):
       "category": "cinema|theater|concert|exhibition|sale|festival|workshop|tour",
       "startsAt": "RFC3339 UTC, e.g. 2026-05-14T19:30:00Z",
       "endsAt": "RFC3339 UTC or null",
+      "durationMinutes": 120,
       "venueName": "Place where it happens",
       "venueAddress": "Street address if known",
       "latitude": 0.0,
       "longitude": 0.0,
       "priceFrom": null,
       "priceTo": null,
-      "currency": "EUR|USD|...",
+      "currency": "EUR|USD|UAH|...",
       "ticketUrl": "Direct booking link if present, else empty",
-      "thumbnailUrl": "Image URL if present, else empty",
+      "thumbnailUrl": "Image URL (poster, banner, photo) — MANDATORY if present on page",
+      "photos": ["additional image URLs if available"],
       "ageLimit": null,
-      "spokenLanguage": "fr|en|...",
+      "spokenLanguage": "uk|en|...",
+      "facilities": {"parking": true, "wheelchair": false, "wifi": true},
+      "transportInfo": "How to get there: metro station, bus, parking address",
+      "whatToBring": "What to bring: comfortable shoes, warm jacket, etc.",
       "meta": {}
     }
   ]
 }
 
 Rules:
-- Up to 30 events per call.
+- Up to 50 events per call. Extract ALL upcoming events you can find.
 - Skip past events (older than today).
 - NEVER invent dates, prices, venues — leave the field empty/null when unknown.
 - Use the source language for title/description (we translate later).
-- externalId MUST be unique within this source. Prefer the canonical URL.
+- externalId MUST be unique within this source. Prefer the canonical URL or slug.
+- thumbnailUrl is CRITICAL — look for event poster, banner, og:image, hero image.
+  If the page has any event image at all, extract it. Check <img>, <meta og:image>,
+  background-image CSS, data-src attributes.
+- durationMinutes: estimate from endsAt-startsAt, or from typical event length
+  (cinema ~120, concert ~150, theater ~120, exhibition ~60, workshop ~90).
+  Use null only if truly impossible to estimate.
+- facilities: extract any mention of parking, wheelchair access, wifi,
+  air conditioning, wardrobe, bar, restaurant, children's room.
+  Use empty object {} if nothing mentioned.
+- transportInfo: extract metro station, bus routes, parking, address directions.
+  Leave empty if not mentioned.
+- whatToBring: extract recommendations about dress code, equipment, documents.
+  Leave empty if not mentioned.
 - Return ONLY JSON, no commentary."""
 
 
@@ -499,7 +517,7 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.1,
-            max_tokens=4000,
+            max_tokens=12000,
             response_format={"type": "json_object"},
         )
         content = resp.choices[0].message.content or "{}"
@@ -519,6 +537,23 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
         cat = (item.get("category") or "festival").lower().strip()
         if cat not in VALID_CATEGORIES:
             cat = src.categories[0] if src.categories else "festival"
+        photos_raw = item.get("photos") or []
+        if not isinstance(photos_raw, list):
+            photos_raw = []
+        photos = [str(p).strip()[:1000] for p in photos_raw if isinstance(p, str) and p.strip()][:10]
+
+        facilities_raw = item.get("facilities")
+        facilities = facilities_raw if isinstance(facilities_raw, dict) else {}
+
+        duration = item.get("durationMinutes")
+        if duration is not None:
+            try:
+                duration = int(duration)
+                if duration <= 0 or duration > 1440:
+                    duration = None
+            except (TypeError, ValueError):
+                duration = None
+
         out.append({
             "externalId": (item.get("externalId") or "").strip()[:200],
             "title": title[:500],
@@ -526,6 +561,7 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
             "category": cat,
             "startsAt": item.get("startsAt"),
             "endsAt": item.get("endsAt"),
+            "durationMinutes": duration,
             "venueName": (item.get("venueName") or "")[:500],
             "venueAddress": (item.get("venueAddress") or "")[:500],
             "latitude": _safe_float(item.get("latitude")),
@@ -535,8 +571,12 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
             "currency": (item.get("currency") or "")[:8],
             "ticketUrl": (item.get("ticketUrl") or "").strip()[:1000],
             "thumbnailUrl": (item.get("thumbnailUrl") or "").strip()[:1000],
+            "photos": photos,
             "ageLimit": item.get("ageLimit"),
             "spokenLanguage": (item.get("spokenLanguage") or "")[:20],
+            "facilities": facilities,
+            "transportInfo": (item.get("transportInfo") or "")[:2000],
+            "whatToBring": (item.get("whatToBring") or "")[:1000],
             "meta": item.get("meta") if isinstance(item.get("meta"), dict) else {},
             "contentLanguage": src.language or "",
         })
