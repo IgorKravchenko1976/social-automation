@@ -415,7 +415,8 @@ Category mapping cheat sheet (when source content is in Ukrainian / English):
       "startsAt": "RFC3339 UTC, e.g. 2026-05-14T19:30:00Z",
       "endsAt": "RFC3339 UTC or null",
       "durationMinutes": 120,
-      "venueName": "Place where it happens",
+      "venueName": "Venue name in ORIGINAL language as on the page",
+      "venueNameUk": "Venue name translated to Ukrainian (e.g. Національна опера України)",
       "venueAddress": "Street address if known",
       "latitude": 0.0,
       "longitude": 0.0,
@@ -440,6 +441,10 @@ Rules:
 - Skip past events (older than today).
 - NEVER invent dates, prices, venues — leave the field empty/null when unknown.
 - Use the source language for title/description (we translate later).
+- venueName: keep the ORIGINAL name as written on the page (e.g. "Kyiv Opera House").
+- venueNameUk: ALWAYS provide the Ukrainian name (e.g. "Київська опера").
+  For Ukrainian sources both fields may be the same. For English/other sources,
+  translate the venue name to Ukrainian. Use the official Ukrainian name if known.
 - externalId MUST be unique within this source. Prefer the canonical URL or slug.
 - thumbnailUrl is CRITICAL — look for event poster, banner, og:image, hero image.
   If the page has any event image at all, extract it. Check <img>, <meta og:image>,
@@ -563,6 +568,7 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
             "endsAt": item.get("endsAt"),
             "durationMinutes": duration,
             "venueName": (item.get("venueName") or "")[:500],
+            "venueNameUk": (item.get("venueNameUk") or "")[:500],
             "venueAddress": (item.get("venueAddress") or "")[:500],
             "latitude": _safe_float(item.get("latitude")),
             "longitude": _safe_float(item.get("longitude")),
