@@ -2,8 +2,9 @@
 
 Polls imin-backend's /v1/api/city-pulse/next-city-event-for-post every
 5 minutes and creates a Post + Publication rows for the next available
-event from ANY city. The existing publisher.py picks them up on its
-normal cycle and dispatches to Telegram, Facebook, Instagram in parallel.
+Ukrainian event (country_code=UA, any city). publisher.py's dedicated
+publish_city_pulse_queue() picks them up every 15 min and dispatches
+to Telegram, Facebook, Instagram.
 
 One event = one post (one-shot, deduplicated by posted_to_social_at on
 the backend). Publication is in Ukrainian primarily; translations.en is
@@ -63,14 +64,15 @@ def _backend_base() -> str:
 
 # ── Backend client ──────────────────────────────────────────────
 
-async def _fetch_next_city_event() -> Optional[dict]:
-    """GET /v1/api/city-pulse/next-city-event-for-post (any city)."""
+async def _fetch_next_city_event(country_code: str = "UA") -> Optional[dict]:
+    """GET /v1/api/city-pulse/next-city-event-for-post for a country."""
     if not _backend_configured():
         return None
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.get(
             f"{_backend_base()}/v1/api/city-pulse/next-city-event-for-post",
             headers=_backend_headers(),
+            params={"country_code": country_code},
         )
         resp.raise_for_status()
         data = resp.json()
