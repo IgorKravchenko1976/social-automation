@@ -69,7 +69,17 @@ async def generate_post_text(
     if not limits["supports_links"]:
         user_prompt_parts.append("Do NOT include links (platform does not support clickable links).")
 
-    if content_type == "city_pulse" and source_text:
+    if content_type == "web_news" and source_text:
+        user_prompt_parts.append(f"\n{source_text[:3000]}")
+        user_prompt_parts.append(
+            "\n=== ІНСТРУКЦІЯ ==="
+            "\nСтвори ІНФОРМАТИВНИЙ пост на основі цієї РЕАЛЬНОЇ новини."
+            "\nВикористовуй ВИКЛЮЧНО факти з новини вище — нічого не вигадуй."
+            "\nОБОВ'ЯЗКОВО вкажи: 📰 Джерело: [назва медіа]"
+            "\nОБОВ'ЯЗКОВО вкажи: 📅 дату та 📍 місцевість з новини."
+            "\nНЕ додавай фактів яких немає в оригінальній новині."
+        )
+    elif content_type == "city_pulse" and source_text:
         user_prompt_parts.append(f"\n=== ДАНІ ПРО ПОДІЮ ===\n{source_text[:3000]}")
         user_prompt_parts.append(
             "\n=== ІНСТРУКЦІЯ ==="
