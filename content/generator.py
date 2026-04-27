@@ -69,7 +69,16 @@ async def generate_post_text(
     if not limits["supports_links"]:
         user_prompt_parts.append("Do NOT include links (platform does not support clickable links).")
 
-    if content_type == "poi_spotlight" and source_text:
+    if content_type == "city_pulse" and source_text:
+        user_prompt_parts.append(f"\n=== ДАНІ ПРО ПОДІЮ ===\n{source_text[:3000]}")
+        user_prompt_parts.append(
+            "\n=== ІНСТРУКЦІЯ ==="
+            "\nСтвори ПРИВАБЛИВИЙ пост про ЦЮ ПОДІЮ на основі наданих даних."
+            "\nВикористовуй ВИКЛЮЧНО факти з даних вище — нічого не вигадуй."
+            "\nДата, час, місце, ціна — ОБОВ'ЯЗКОВО якщо є в даних."
+            "\nНЕ вигадуй додаткових деталей яких немає в даних."
+        )
+    elif content_type == "poi_spotlight" and source_text:
         user_prompt_parts.append(f"\n{source_text[:3000]}")
         user_prompt_parts.append(
             "\n=== ІНСТРУКЦІЯ ==="

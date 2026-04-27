@@ -114,13 +114,21 @@ async def _generate_and_verify_text(
     territory_hint = ""
 
     if post.source == "city_pulse":
-        text = post.content_raw or ""
-        if text:
-            post.log_pipeline("text_gen", "ok", "city_pulse: using content_raw directly (no AI rewrite)")
-            post.log_pipeline("fact_check", "skip", "city_pulse: data from verified sources, skip fact-check")
-            await _extract_geo_for_post(post, text)
-            return text
-        return None
+        try:
+            text = await generate_post_text(
+                topic="", platform=platform,
+                source_text=post.content_raw,
+                content_type="city_pulse",
+            )
+        except BlockedTerritoryError as e:
+            post.log_pipeline("text_gen", "fail", f"TERRITORY BLOCK: '{e.keyword}'")
+            return None
+        post.log_pipeline("text_gen", "ok",
+                          f"city_pulse: AI adapted for {platform.value}, len={len(text)}")
+        post.log_pipeline("fact_check", "skip",
+                          "city_pulse: data from verified sources, skip fact-check")
+        await _extract_geo_for_post(post, text)
+        return text
 
     for attempt in range(MAX_FACT_CHECK_RETRIES + 1):
         try:
