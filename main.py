@@ -173,7 +173,7 @@ def _setup_scheduler() -> None:
                           id="city_pulse_discover_queue", replace_existing=True)
         scheduler.add_job(process_city_pulse_verify, "interval", minutes=4,
                           id="city_pulse_verify_queue", replace_existing=True)
-        scheduler.add_job(process_city_pulse_fetch, "interval", minutes=6,
+        scheduler.add_job(process_city_pulse_fetch, "interval", minutes=3,
                           id="city_pulse_fetch_queue", replace_existing=True)
         scheduler.add_job(process_city_pulse_voice, "interval", minutes=3,
                           id="city_pulse_voice_queue", replace_existing=True)
