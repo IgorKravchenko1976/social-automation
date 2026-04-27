@@ -341,12 +341,12 @@ async def trigger_city_pulse_voice():
 
 
 @router.post("/trigger/city-pulse-post")
-async def trigger_city_pulse_post(country_code: str = "UA", city: str = "Kyiv"):
-    """Run one city-pulse-post cycle (queue Post + Publications for one event)."""
+async def trigger_city_pulse_post():
+    """Run one city-pulse-post cycle (queue Post + Publications for one event from any city)."""
     from scheduler.city_pulse_post_creator import process_city_pulse_post
     try:
-        ok = await process_city_pulse_post(country_code=country_code, city=city)
-        return {"status": "ok", "processed": ok, "country_code": country_code, "city": city}
+        ok = await process_city_pulse_post()
+        return {"status": "ok", "processed": ok}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 

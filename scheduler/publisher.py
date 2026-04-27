@@ -657,3 +657,71 @@ async def _publish_scheduled_post_inner(time_slot: int) -> None:
         "=== PUBLISH === Slot %d SKIPPED: %d topic attempts failed fact-check — no post published",
         time_slot, MAX_TOPIC_ATTEMPTS,
     )
+
+
+# ---------------------------------------------------------------------------
+# City Pulse — independent publish cycle (not tied to POI time slots)
+# ---------------------------------------------------------------------------
+
+_city_pulse_lock = asyncio.Lock()
+
+MAX_CITY_PULSE_PER_CYCLE = 3
+
+
+async def publish_city_pulse_queue() -> int:
+    """Publish queued city_pulse posts independently of POI time slots.
+
+    Runs every 15 minutes. Picks up to MAX_CITY_PULSE_PER_CYCLE QUEUED
+    city_pulse posts and publishes them. After successful publication,
+    marks the event on the backend via mark-city-event-posted.
+
+    Returns the number of posts successfully published.
+    """
+    async with _city_pulse_lock:
+        async with async_session() as session:
+            result = await session.execute(
+                select(Post)
+                .join(Publication)
+                .where(
+                    Post.source == "city_pulse",
+                    Publication.status == PostStatus.QUEUED,
+                )
+                .group_by(Post.id)
+                .order_by(Post.created_at)
+                .limit(MAX_CITY_PULSE_PER_CYCLE)
+            )
+            posts = result.scalars().all()
+
+        if not posts:
+            logger.debug("[city-pulse-publish] no queued city_pulse posts")
+            return 0
+
+        published = 0
+        for post in posts:
+            try:
+                success = await _try_publish_post(post, time_slot=99, content_type="city_pulse")
+                if success:
+                    published += 1
+                    await _mark_city_event_on_backend(post)
+            except Exception:
+                logger.exception(
+                    "[city-pulse-publish] failed to publish post_id=%d", post.id)
+
+        logger.info("[city-pulse-publish] published %d/%d city_pulse posts", published, len(posts))
+        return published
+
+
+async def _mark_city_event_on_backend(post: Post) -> None:
+    """Notify backend that this city event was actually published to socials."""
+    city_event_id = post.poi_point_id
+    if not city_event_id:
+        return
+    try:
+        from scheduler.city_pulse_post_creator import _mark_city_event_posted
+        await _mark_city_event_posted(city_event_id, social_post_id=post.id)
+        logger.info("[city-pulse-publish] marked event %d as posted on backend", city_event_id)
+    except Exception as exc:
+        logger.warning(
+            "[city-pulse-publish] mark-posted failed for event %d: %s",
+            city_event_id, exc,
+        )

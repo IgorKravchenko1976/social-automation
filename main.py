@@ -257,13 +257,19 @@ def _setup_scheduler() -> None:
         # queue Post + Publications. Existing publisher.py picks them up on
         # its loop and dispatches to Telegram, Facebook, Instagram.
         from scheduler.city_pulse_post_creator import process_city_pulse_post
+        from scheduler.publisher import publish_city_pulse_queue
 
         scheduler.add_job(
             process_city_pulse_post,
             "interval", minutes=5,
             id="city_pulse_post_creator", replace_existing=True,
         )
-        logger.info("[city-pulse] Social post creator every 5 min (all cities)")
+        scheduler.add_job(
+            publish_city_pulse_queue,
+            "interval", minutes=15,
+            id="city_pulse_publisher", replace_existing=True,
+        )
+        logger.info("[city-pulse] Post creator every 5 min + publisher every 15 min (all cities)")
 
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 

@@ -32,6 +32,8 @@ from typing import Any, Optional
 
 import httpx
 
+from sqlalchemy import select
+
 from config.platforms import configured_platforms
 from config.settings import settings
 from db.database import async_session
@@ -104,6 +106,18 @@ async def _mark_city_event_posted(
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def _already_queued(city_event_id: int) -> bool:
+    """Check if a Post for this city_event_id already exists in local DB."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(Post.id).where(
+                Post.source == "city_pulse",
+                Post.poi_point_id == city_event_id,
+            ).limit(1)
+        )
+        return result.scalar() is not None
 
 
 # ── Post text builder ──────────────────────────────────────────
@@ -229,6 +243,14 @@ async def process_city_pulse_post() -> bool:
             logger.warning("[city-pulse-post] event missing id: %s", event)
             return False
 
+        if await _already_queued(city_event_id):
+            logger.debug("[city-pulse-post] event %d already has a local Post, skipping", city_event_id)
+            try:
+                await _mark_city_event_posted(city_event_id, failed=True, error="already_queued_locally")
+            except Exception:
+                pass
+            return False
+
         title, content = _format_city_event_for_post(event)
         if len(title) < 5 or len(content) < 50:
             logger.warning(
@@ -312,17 +334,5 @@ async def process_city_pulse_post() -> bool:
             except Exception:
                 pass
             return False
-
-        # Mark on backend so we never repost. If this fails, the same event
-        # could be picked up again — the unique index in DB still prevents
-        # duplicate INSERTs but we'd waste an AI/translation call. Acceptable
-        # trade-off for now.
-        try:
-            await _mark_city_event_posted(city_event_id, social_post_id=post_id)
-        except Exception as exc:
-            logger.warning(
-                "[city-pulse-post] mark-posted failed for event %d: %s",
-                city_event_id, exc,
-            )
 
         return True
