@@ -406,11 +406,16 @@ Category mapping cheat sheet (when source content is in Ukrainian / English):
   - майстер-клас / workshop / lecture → workshop
   - спорт / sport / football / soccer / tennis / basketball / match / матч / гра /
     rugby / boxing / MMA / volleyball / hockey → sport
-    IMPORTANT: If the title or description contains team names (e.g. "Динамо",
-    "Шахтар", "Барселона", "Real Madrid", "Lakers"), or words like "матч",
-    "match", "game", "derby", "cup", "championship", "league", "турнір",
-    "чемпіонат", "ліга", "кубок", "стадіон", "stadium" — it is ALWAYS sport,
-    NEVER concert. Sports teams playing at a stadium = sport, not concert.
+    SPORT vs OTHER disambiguation rules:
+    1. If the page EXPLICITLY says "концерт", "вистава", "спектакль", "concert",
+       "show", "performance" — trust that label, classify accordingly.
+    2. If the page does NOT explicitly label the event type, but contains words
+       like "матч", "match", "game", "derby", "vs", "cup", "championship",
+       "league", "турнір", "чемпіонат", "ліга", "кубок", "стадіон", "stadium",
+       or TWO team-like names separated by " - " or " vs " — classify as sport.
+    3. Some names are ambiguous (e.g. "Спартак" can be a theater or a team).
+       When ambiguous, look at the VENUE: stadium/arena → sport;
+       theater/concert hall → theater/concert.
 
 {
   "events": [
