@@ -21,6 +21,7 @@ from content.tourism_topics import (
 )
 from content.rss_parser import fetch_feed
 from content.poi_client import fetch_next_poi, mark_poi_posted, format_poi_for_ai, ensure_event_for_point
+from content.web_news import search_fresh_travel_news, format_news_for_ai
 from db.database import async_session
 from db.models import Post, Publication
 
@@ -29,11 +30,11 @@ logger = logging.getLogger(__name__)
 ALL_PLATFORMS = configured_platforms()
 
 SLOT_CONTENT_TYPES = [
-    "poi_spotlight",    # 08:00
-    "poi_spotlight",    # 10:00
-    "poi_spotlight",    # 12:00
-    "poi_spotlight",    # 15:00
-    "poi_spotlight",    # 18:00
+    "web_news",    # 08:00  — fresh travel news (fallback: POI)
+    "web_news",    # 10:00  — fresh travel news (fallback: POI)
+    "web_news",    # 12:00  — fresh travel news (fallback: POI)
+    "web_news",    # 15:00  — fresh travel news (fallback: POI)
+    "web_news",    # 18:00  — fresh travel news (fallback: POI)
 ]
 
 MAX_TERRITORY_RETRIES = 3
@@ -162,6 +163,15 @@ async def create_daily_posts() -> None:
         for slot_idx, content_type in enumerate(SLOT_CONTENT_TYPES):
             logger.info("=== CREATE POSTS === Slot %d: type=%s", slot_idx, content_type)
 
+            if content_type == "web_news":
+                post = await _create_web_news_post(session)
+                if post:
+                    created_posts.append((post, "web_news"))
+                    recent_titles.append(post.title or "")
+                    continue
+                logger.info("=== CREATE POSTS === Slot %d: no web news, fallback to poi_spotlight", slot_idx)
+                content_type = "poi_spotlight"
+
             if content_type == "poi_spotlight":
                 post = await _create_poi_spotlight_post(session)
                 if post:
@@ -255,6 +265,55 @@ async def create_daily_posts() -> None:
                 "=== CREATE POSTS === Only %d/%d posts created — some slots may be empty!",
                 len(created_posts), len(settings.post_schedule),
             )
+
+
+async def _create_web_news_post(session: AsyncSession) -> Optional[Post]:
+    """Try to create a post from fresh web news via Perplexity.
+
+    Returns a Post if a fresh, non-duplicate news item was found, or None
+    so the caller can fall back to POI spotlight.
+    """
+    news_item = await search_fresh_travel_news()
+    if news_item is None:
+        logger.info("=== FRESH === No fresh web news found, will fallback to POI")
+        return None
+
+    content_for_ai = format_news_for_ai(news_item)
+    title = news_item.title[:200]
+
+    post = Post(
+        title=title,
+        content_raw=content_for_ai,
+        source="web_news",
+        source_url=news_item.source_url,
+        place_name=(news_item.location or "")[:500],
+    )
+    post.log_pipeline(
+        "topic", "ok",
+        f"web_news: {news_item.source_name} — {news_item.title[:80]} ({news_item.date})",
+    )
+
+    session.add(post)
+    await session.flush()
+
+    for platform in ALL_PLATFORMS:
+        session.add(Publication(post_id=post.id, platform=platform.value))
+
+    try:
+        tr = await translate_post(title, content_for_ai[:1000])
+        if tr:
+            post.translations = _json.dumps(tr, ensure_ascii=False)
+            post.log_pipeline("translate", "ok", f"{len(tr)} languages")
+    except Exception as e:
+        logger.warning("Translation failed for web_news post: %s", e)
+        post.log_pipeline("translate", "fail", str(e)[:200])
+
+    await session.commit()
+    logger.info(
+        "=== FRESH === Web news post created: post_id=%d title='%s' source=%s",
+        post.id, title[:50], news_item.source_name,
+    )
+    return post
 
 
 MAX_POI_SKIP_RETRIES = 5
@@ -409,7 +468,13 @@ async def create_single_post(content_type: str) -> Optional[Post]:
     logger.info("=== FRESH === Creating single post type=%s", content_type)
 
     async with async_session() as session:
-        # POI spotlight: fetch from our enriched database
+        if content_type == "web_news":
+            post = await _create_web_news_post(session)
+            if post:
+                return post
+            logger.info("=== FRESH === No web news, falling back to poi_spotlight")
+            content_type = "poi_spotlight"
+
         if content_type == "poi_spotlight":
             post = await _create_poi_spotlight_post(session)
             if post:

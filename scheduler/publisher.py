@@ -38,6 +38,8 @@ def _detect_content_type(post: Post) -> str:
     """Determine content type from post title/content for correct AI prompt."""
     if post.source == "poi":
         return "poi_spotlight"
+    if post.source == "web_news":
+        return "web_news"
     if post.source == "rss":
         return "tourism_news"
     title = (post.title or "").lower()
@@ -132,7 +134,23 @@ async def _generate_and_verify_text(
 
     for attempt in range(MAX_FACT_CHECK_RETRIES + 1):
         try:
-            if post.source == "rss":
+            if post.source == "web_news":
+                source_text = post.content_raw
+                if attempt > 0:
+                    source_text += (
+                        "\n\nУВАГА РЕДАКТОРА: попередня версія відхилена фактчекером. "
+                        f"Проблема: {last_suggestion}\n"
+                        "Перепиши ТІЛЬКИ на основі наданої новини. "
+                        "НЕ додавай жодних фактів від себе. "
+                        "ОБОВ'ЯЗКОВО вкажи 📰 Джерело."
+                        f"{territory_hint}"
+                    )
+                text = await generate_post_text(
+                    topic="", platform=platform,
+                    source_text=source_text,
+                    content_type="web_news",
+                )
+            elif post.source == "rss":
                 source_text = post.content_raw
                 if attempt > 0:
                     source_text += (
@@ -543,7 +561,7 @@ async def _try_publish_post(
             (p.content_adapted for p in publications if p.content_adapted), None,
         )
         if best_text and (
-            post.source == "poi"
+            post.source in ("poi", "web_news")
             or len(best_text) > len(post.content_raw or "")
         ):
             post.content_raw = best_text
