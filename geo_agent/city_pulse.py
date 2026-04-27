@@ -54,7 +54,7 @@ VERIFY_TIMEOUT = 30
 
 VALID_CATEGORIES = {
     "cinema", "theater", "concert", "exhibition",
-    "sale", "festival", "workshop", "tour",
+    "sale", "festival", "workshop", "tour", "sport",
 }
 
 VALID_SOURCE_TYPES = {
@@ -138,7 +138,7 @@ Return ONLY valid JSON in this exact shape:
 
 Rules:
 1. Up to 8 sources per city. Quality over quantity.
-2. Allowed categories: cinema, theater, concert, exhibition, sale, festival, workshop, tour.
+2. Allowed categories: cinema, theater, concert, exhibition, sale, festival, workshop, tour, sport.
 3. Allowed sourceType: api_json, api_ical, rss, sitemap, html_scrape, other.
 4. Prefer feed_url (RSS/iCal/sitemap/JSON) over plain html_scrape.
 5. ONLY official venue/operator domains, NOT aggregators that resell tickets.
@@ -404,6 +404,7 @@ Category mapping cheat sheet (when source content is in Ukrainian / English):
   - фестиваль / festival / picnic / open-air → festival
   - квест / tour / екскурсія / прогулянка → tour
   - майстер-клас / workshop / lecture → workshop
+  - спорт / sport / football / soccer / tennis / basketball / match / матч → sport
 
 {
   "events": [
@@ -411,7 +412,7 @@ Category mapping cheat sheet (when source content is in Ukrainian / English):
       "externalId": "stable id from source (URL/permalink/slug) — MUST be present",
       "title": "Short title in source language",
       "description": "1-3 sentence overview",
-      "category": "cinema|theater|concert|exhibition|sale|festival|workshop|tour",
+      "category": "cinema|theater|concert|exhibition|sale|festival|workshop|tour|sport",
       "startsAt": "RFC3339 UTC, e.g. 2026-05-14T19:30:00Z",
       "endsAt": "RFC3339 UTC or null",
       "durationMinutes": 120,
