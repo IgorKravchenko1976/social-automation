@@ -110,6 +110,36 @@ async def _mark_city_event_posted(
         return resp.json()
 
 
+def _quality_gate(event: dict, city_event_id: int) -> str:
+    """Return rejection reason or empty string if event passes all gates."""
+    thumb = (event.get("thumbnailUrl") or "").strip()
+    if not thumb or not thumb.startswith("http"):
+        return "no_thumbnail_url"
+
+    if not event.get("startsAt"):
+        return "no_date"
+
+    venue = (event.get("venueName") or "").strip()
+    if not venue:
+        return "no_venue"
+
+    translations = event.get("translations") or {}
+    if isinstance(translations, str):
+        try:
+            translations = _json.loads(translations)
+        except Exception:
+            translations = {}
+    uk = translations.get("uk") if isinstance(translations, dict) else None
+    if not isinstance(uk, dict) or not uk.get("title"):
+        return "no_uk_translation"
+
+    title = uk.get("title", "").strip()
+    if len(title) < 5:
+        return "title_too_short"
+
+    return ""
+
+
 async def _already_queued(city_event_id: int) -> bool:
     """Check if a Post for this city_event_id already exists in local DB."""
     async with async_session() as session:
@@ -253,26 +283,18 @@ async def process_city_pulse_post() -> bool:
                 pass
             return False
 
-        title, content = _format_city_event_for_post(event)
-        if len(title) < 5 or len(content) < 50:
-            logger.warning(
-                "[city-pulse-post] event %d: text too short (title=%d, content=%d), skipping",
-                city_event_id, len(title), len(content),
-            )
+        reject = _quality_gate(event, city_event_id)
+        if reject:
+            logger.info("[city-pulse-post] event %d rejected: %s", city_event_id, reject)
             try:
-                await _mark_city_event_posted(
-                    city_event_id, failed=True, error="text_too_short")
+                await _mark_city_event_posted(city_event_id, failed=True, error=reject)
             except Exception:
                 pass
             return False
 
-        # Download the source-supplied thumbnail if available. We never use
-        # Pexels/DALL-E for city events (same Le Montclair guard as POI) —
-        # better text-only than a fake image. publisher.py respects this
-        # via the source check.
         image_path: Optional[str] = None
         thumb_url = (event.get("thumbnailUrl") or "").strip()
-        if thumb_url:
+        if thumb_url and thumb_url.startswith("http"):
             try:
                 from content.media import download_image_from_url
                 image_path = await download_image_from_url(thumb_url)
@@ -281,6 +303,16 @@ async def process_city_pulse_post() -> bool:
                     "[city-pulse-post] thumbnail download failed for event %d: %s",
                     city_event_id, exc,
                 )
+
+        if not image_path:
+            logger.info("[city-pulse-post] event %d: no usable photo, skipping", city_event_id)
+            try:
+                await _mark_city_event_posted(city_event_id, failed=True, error="no_photo")
+            except Exception:
+                pass
+            return False
+
+        title, content = _format_city_event_for_post(event)
 
         post_id: Optional[int] = None
         try:
