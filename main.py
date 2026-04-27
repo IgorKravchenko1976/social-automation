@@ -253,10 +253,9 @@ def _setup_scheduler() -> None:
         logger.info("[city-pulse] Weekly auto-discover scan every Tuesday at 05:00")
 
         # ── City Pulse social post pipeline (April 2026) ──
-        # Every 5 minutes: pull one Kyiv event from imin-backend, queue Post
-        # + Publications. Existing publisher.py picks them up on its loop and
-        # dispatches to Telegram, Facebook, Instagram. One event = one post,
-        # deduplicated by city_events.posted_to_social_at on backend side.
+        # Every 5 minutes: pull one event from imin-backend (any city),
+        # queue Post + Publications. Existing publisher.py picks them up on
+        # its loop and dispatches to Telegram, Facebook, Instagram.
         from scheduler.city_pulse_post_creator import process_city_pulse_post
 
         scheduler.add_job(
@@ -264,7 +263,7 @@ def _setup_scheduler() -> None:
             "interval", minutes=5,
             id="city_pulse_post_creator", replace_existing=True,
         )
-        logger.info("[city-pulse] Social post creator every 5 min (Kyiv only for now)")
+        logger.info("[city-pulse] Social post creator every 5 min (all cities)")
 
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 

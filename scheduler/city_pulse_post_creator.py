@@ -2,8 +2,8 @@
 
 Polls imin-backend's /v1/api/city-pulse/next-city-event-for-post every
 5 minutes and creates a Post + Publication rows for the next available
-Kyiv event. The existing publisher.py picks them up on its normal cycle
-and dispatches to Telegram, Facebook, Instagram in parallel.
+event from ANY city. The existing publisher.py picks them up on its
+normal cycle and dispatches to Telegram, Facebook, Instagram in parallel.
 
 One event = one post (one-shot, deduplicated by posted_to_social_at on
 the backend). Publication is in Ukrainian primarily; translations.en is
@@ -61,15 +61,14 @@ def _backend_base() -> str:
 
 # ── Backend client ──────────────────────────────────────────────
 
-async def _fetch_next_city_event(country_code: str = "UA", city: str = "Kyiv") -> Optional[dict]:
-    """GET /v1/api/city-pulse/next-city-event-for-post."""
+async def _fetch_next_city_event() -> Optional[dict]:
+    """GET /v1/api/city-pulse/next-city-event-for-post (any city)."""
     if not _backend_configured():
         return None
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.get(
             f"{_backend_base()}/v1/api/city-pulse/next-city-event-for-post",
             headers=_backend_headers(),
-            params={"country_code": country_code, "city": city},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -192,8 +191,10 @@ def _format_city_event_for_post(event: dict) -> tuple[str, str]:
     if app_link:
         parts.append(f"📲 Деталі в I'M IN: {app_link}")
 
-    parts.append("\n📋 Дані: City Pulse / kontramarka.ua / concert.ua")
-    parts.append("#Афіша #Київ")
+    source_name = (event.get("sourceName") or "").strip()
+    parts.append(f"\n📋 Дані: City Pulse{' / ' + source_name if source_name else ''}")
+    city_name = (event.get("city") or "").strip()
+    parts.append(f"#Афіша{' #' + city_name if city_name else ''}")
 
     content = "\n\n".join(p for p in parts if p)
     return title[:200], content
@@ -201,7 +202,7 @@ def _format_city_event_for_post(event: dict) -> tuple[str, str]:
 
 # ── Main entry point ──────────────────────────────────────────
 
-async def process_city_pulse_post(country_code: str = "UA", city: str = "Kyiv") -> bool:
+async def process_city_pulse_post() -> bool:
     """One cycle: pull → make Post → mark posted on backend.
 
     Returns True if a post was created, False otherwise. Designed to run
@@ -214,13 +215,13 @@ async def process_city_pulse_post(country_code: str = "UA", city: str = "Kyiv") 
             return False
 
         try:
-            event = await _fetch_next_city_event(country_code, city)
+            event = await _fetch_next_city_event()
         except Exception as exc:
             logger.warning("[city-pulse-post] fetch failed: %s", exc)
             return False
 
         if not event:
-            logger.debug("[city-pulse-post] no events queued for %s/%s", country_code, city)
+            logger.debug("[city-pulse-post] no events queued")
             return False
 
         city_event_id = event.get("id")
