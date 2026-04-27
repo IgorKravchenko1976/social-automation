@@ -404,7 +404,13 @@ Category mapping cheat sheet (when source content is in Ukrainian / English):
   - фестиваль / festival / picnic / open-air → festival
   - квест / tour / екскурсія / прогулянка → tour
   - майстер-клас / workshop / lecture → workshop
-  - спорт / sport / football / soccer / tennis / basketball / match / матч → sport
+  - спорт / sport / football / soccer / tennis / basketball / match / матч / гра /
+    rugby / boxing / MMA / volleyball / hockey → sport
+    IMPORTANT: If the title or description contains team names (e.g. "Динамо",
+    "Шахтар", "Барселона", "Real Madrid", "Lakers"), or words like "матч",
+    "match", "game", "derby", "cup", "championship", "league", "турнір",
+    "чемпіонат", "ліга", "кубок", "стадіон", "stadium" — it is ALWAYS sport,
+    NEVER concert. Sports teams playing at a stadium = sport, not concert.
 
 {
   "events": [
