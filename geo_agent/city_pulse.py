@@ -33,7 +33,7 @@ import logging
 import re
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import httpx
 
@@ -571,6 +571,15 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
             except (TypeError, ValueError):
                 duration = None
 
+        thumb_raw = (item.get("thumbnailUrl") or "").strip()[:1000]
+        ticket_raw = (item.get("ticketUrl") or "").strip()[:1000]
+        base_url = src.feed_url or src.homepage_url or ""
+        if thumb_raw and not thumb_raw.startswith("http"):
+            thumb_raw = urljoin(base_url, thumb_raw)
+        if ticket_raw and not ticket_raw.startswith("http"):
+            ticket_raw = urljoin(base_url, ticket_raw)
+        photos = [urljoin(base_url, p) if not p.startswith("http") else p for p in photos]
+
         out.append({
             "externalId": (item.get("externalId") or "").strip()[:200],
             "title": title[:500],
@@ -587,8 +596,8 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
             "priceFrom": _safe_optional_float(item.get("priceFrom")),
             "priceTo": _safe_optional_float(item.get("priceTo")),
             "currency": (item.get("currency") or "")[:8],
-            "ticketUrl": (item.get("ticketUrl") or "").strip()[:1000],
-            "thumbnailUrl": (item.get("thumbnailUrl") or "").strip()[:1000],
+            "ticketUrl": ticket_raw,
+            "thumbnailUrl": thumb_raw,
             "photos": photos,
             "ageLimit": item.get("ageLimit"),
             "spokenLanguage": (item.get("spokenLanguage") or "")[:20],
