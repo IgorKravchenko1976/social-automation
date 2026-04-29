@@ -321,8 +321,6 @@ async def process_city_pulse_post() -> bool:
                     source_url=event.get("sourceHomepageUrl") or "",
                     ticket_url=event.get("ticketUrl") or "",
                     image_path=image_path,
-                    latitude=event.get("latitude"),
-                    longitude=event.get("longitude"),
                     place_name=(event.get("venueName") or "")[:500],
                     poi_point_id=city_event_id,
                 )
