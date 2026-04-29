@@ -238,7 +238,7 @@ def _format_city_event_for_post(event: dict) -> tuple[str, str]:
         parts.append(f"📲 Деталі в I'M IN: {app_link}")
 
     source_name = (event.get("sourceName") or "").strip()
-    parts.append(f"\n📋 Дані: City Pulse{' / ' + source_name if source_name else ''}")
+    parts.append(f"\n📋 Дані: IM-IN Pulse{' / ' + source_name if source_name else ''}")
     city_name = (event.get("city") or "").strip()
     parts.append(f"#Афіша{' #' + city_name if city_name else ''}")
 
