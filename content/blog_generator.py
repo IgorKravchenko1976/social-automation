@@ -144,6 +144,7 @@ def generate_post_html(
     published_at: Optional[datetime] = None,
     image_url: Optional[str] = None,
     source_url: Optional[str] = None,
+    ticket_url: Optional[str] = None,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     place_name: Optional[str] = None,
@@ -216,6 +217,22 @@ def generate_post_html(
                 <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
             </svg>
             Джерело: {escape(domain)}
+        </a>"""
+
+    ticket_html = ""
+    if ticket_url:
+        try:
+            from urllib.parse import urlparse
+            t_domain = urlparse(ticket_url).hostname or ""
+            t_domain = t_domain.replace("www.", "")
+        except Exception:
+            t_domain = "квитки"
+        ticket_html = f"""
+        <a class="post-source" href="{escape(ticket_url)}" target="_blank" rel="noopener" style="background:#DCFCE7;color:#16A34A;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M2 9a3 3 0 013-3h14a3 3 0 013 3v2a3 3 0 00 0 6v2a3 3 0 01-3 3H5a3 3 0 01-3-3v-2a3 3 0 000-6V9z"/>
+            </svg>
+            Квитки: {escape(t_domain)}
         </a>"""
 
     image_html = ""
@@ -450,6 +467,7 @@ def generate_post_html(
             </div>
             <div class="post-meta">
                 {geo_html}
+                {ticket_html}
                 {source_html}
             </div>
         </article>
@@ -577,6 +595,7 @@ async def generate_all_published() -> list[Path]:
             published_at=published_at,
             image_url=image_url,
             source_url=post.source_url,
+            ticket_url=getattr(post, "ticket_url", None),
             latitude=post.latitude,
             longitude=post.longitude,
             place_name=post.place_name,

@@ -44,6 +44,7 @@ class Post(Base):
     content_raw = Column(Text, nullable=False)
     source = Column(String(50), default="ai")  # ai / rss / manual
     source_url = Column(String(2000), nullable=True)
+    ticket_url = Column(String(2000), nullable=True)
     image_path = Column(String(1000), nullable=True)
     video_path = Column(String(1000), nullable=True)
     latitude = Column(Float, nullable=True)

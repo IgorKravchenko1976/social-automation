@@ -231,9 +231,6 @@ def _format_city_event_for_post(event: dict) -> tuple[str, str]:
     if price_line:
         parts.append(price_line)
 
-    if ticket_url:
-        parts.append(f"🎟 Квитки: {ticket_url}")
-
     if app_link:
         parts.append(f"📲 Деталі в I'M IN: {app_link}")
 
@@ -321,12 +318,13 @@ async def process_city_pulse_post() -> bool:
                     title=title,
                     content_raw=content,
                     source="city_pulse",
-                    source_url=event.get("ticketUrl") or "",
+                    source_url=event.get("sourceHomepageUrl") or "",
+                    ticket_url=event.get("ticketUrl") or "",
                     image_path=image_path,
                     latitude=event.get("latitude"),
                     longitude=event.get("longitude"),
                     place_name=(event.get("venueName") or "")[:500],
-                    poi_point_id=city_event_id,  # repurposed: stores city_events.id when source='city_pulse'
+                    poi_point_id=city_event_id,
                 )
                 post.log_pipeline(
                     "topic", "ok",
