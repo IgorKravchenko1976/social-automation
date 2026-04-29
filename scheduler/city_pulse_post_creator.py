@@ -64,15 +64,18 @@ def _backend_base() -> str:
 
 # ── Backend client ──────────────────────────────────────────────
 
-async def _fetch_next_city_event(country_code: str = "UA") -> Optional[dict]:
-    """GET /v1/api/city-pulse/next-city-event-for-post for a country."""
+async def _fetch_next_city_event(country_code: str = "") -> Optional[dict]:
+    """GET /v1/api/city-pulse/next-city-event-for-post (any city by default)."""
     if not _backend_configured():
         return None
+    params = {}
+    if country_code:
+        params["country_code"] = country_code
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.get(
             f"{_backend_base()}/v1/api/city-pulse/next-city-event-for-post",
             headers=_backend_headers(),
-            params={"country_code": country_code},
+            params=params,
         )
         resp.raise_for_status()
         data = resp.json()
