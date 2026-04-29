@@ -330,7 +330,7 @@ async def process_city_pulse_post() -> bool:
                 )
                 post.log_pipeline(
                     "topic", "ok",
-                    f"city event #{city_event_id}: {title[:80]} ({city})",
+                    f"city event #{city_event_id}: {title[:80]} ({event.get('city', '')})",
                 )
 
                 session.add(post)
