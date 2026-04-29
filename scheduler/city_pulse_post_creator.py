@@ -140,6 +140,28 @@ def _quality_gate(event: dict, city_event_id: int) -> str:
     return ""
 
 
+def _is_precise_location(lat, lon) -> bool:
+    """Return True only if coordinates look like a specific venue, not city center.
+
+    City centers from GPT typically have 2 decimal places (e.g. 50.45, 30.52).
+    Venue-level coordinates have 4+ decimal places (e.g. 50.4501, 30.5234).
+    """
+    if not lat or not lon:
+        return False
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return False
+    if lat_f == 0.0 or lon_f == 0.0:
+        return False
+    lat_str = f"{lat_f:.6f}".rstrip("0")
+    lon_str = f"{lon_f:.6f}".rstrip("0")
+    lat_decimals = len(lat_str.split(".")[1]) if "." in lat_str else 0
+    lon_decimals = len(lon_str.split(".")[1]) if "." in lon_str else 0
+    return lat_decimals >= 4 or lon_decimals >= 4
+
+
 async def _already_queued(city_event_id: int) -> bool:
     """Check if a Post for this city_event_id already exists in local DB."""
     async with async_session() as session:
@@ -314,6 +336,12 @@ async def process_city_pulse_post() -> bool:
         post_id: Optional[int] = None
         try:
             async with async_session() as session:
+                lat = event.get("latitude")
+                lon = event.get("longitude")
+                if not _is_precise_location(lat, lon):
+                    lat = None
+                    lon = None
+
                 post = Post(
                     title=title,
                     content_raw=content,
@@ -321,6 +349,8 @@ async def process_city_pulse_post() -> bool:
                     source_url=event.get("sourceHomepageUrl") or "",
                     ticket_url=event.get("ticketUrl") or "",
                     image_path=image_path,
+                    latitude=lat,
+                    longitude=lon,
                     place_name=(event.get("venueName") or "")[:500],
                     poi_point_id=city_event_id,
                 )
