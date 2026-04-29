@@ -285,9 +285,9 @@ async def process_city_pulse_post() -> bool:
 
         reject = _quality_gate(event, city_event_id)
         if reject:
-            logger.info("[city-pulse-post] event %d rejected: %s", city_event_id, reject)
+            logger.info("[city-pulse-post] event %d permanently rejected: %s", city_event_id, reject)
             try:
-                await _mark_city_event_posted(city_event_id, failed=True, error=reject)
+                await _mark_city_event_posted(city_event_id)
             except Exception:
                 pass
             return False
@@ -305,9 +305,9 @@ async def process_city_pulse_post() -> bool:
                 )
 
         if not image_path:
-            logger.info("[city-pulse-post] event %d: no usable photo, skipping", city_event_id)
+            logger.info("[city-pulse-post] event %d permanently rejected: no_photo", city_event_id)
             try:
-                await _mark_city_event_posted(city_event_id, failed=True, error="no_photo")
+                await _mark_city_event_posted(city_event_id)
             except Exception:
                 pass
             return False
