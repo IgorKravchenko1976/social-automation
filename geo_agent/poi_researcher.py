@@ -21,6 +21,31 @@ logger = logging.getLogger(__name__)
 _lock = asyncio.Lock()
 DAILY_LIMIT = 50
 
+# Domains we never accept as a research source (Russia/Belarus/occupied territories).
+# Aligns with no-russian-domains.mdc policy.
+BANNED_SOURCE_DOMAINS = (
+    ".ru/", ".ru?", ".ru#",
+    "://yandex.", "://mail.ru", "://vk.com", "://ok.ru", "://rutube.",
+    "://kp.ru", "://ria.ru", "://tass.ru", "://rbc.ru", "://rt.com",
+    "://lenta.ru", "://rg.ru", "://gazeta.ru", "://kommersant.ru",
+    "://sputniknews.", "://by/", ".by/",
+)
+
+
+def _is_banned_source(url: str) -> bool:
+    """True for Russian/Belarusian/occupied-territory sources."""
+    if not url:
+        return False
+    u = url.lower().rstrip("/")
+    if u.endswith(".ru") or u.endswith(".by"):
+        return True
+    return any(marker in u for marker in BANNED_SOURCE_DOMAINS)
+
+
+def _filter_sources(sources: list[dict]) -> list[dict]:
+    """Drop banned sources while preserving order."""
+    return [s for s in sources if not _is_banned_source(s.get("url") or "")]
+
 
 SUMMARIZE_SYSTEM_PROMPT = """You are a travel researcher. You are given web search results about a SPECIFIC VENUE/ESTABLISHMENT.
 Create a structured JSON summary using ONLY information from the provided search results.
@@ -118,10 +143,13 @@ async def _research_poi(poi: backend_client.POIResearchTask) -> list[dict]:
             research_data = parse_research_json(result)
             if research_data is None and len(result.content) > 50:
                 research_data = {"summary": result.content}
-            sources = [{"url": url, "title": "", "snippet": ""} for url in result.citations[:10]]
+            raw_sources = [{"url": url, "title": "", "snippet": ""} for url in result.citations[:10]]
+            sources = _filter_sources(raw_sources)
+            dropped = len(raw_sources) - len(sources)
             ai_provider = "perplexity"
-            logger.info("[poi-researcher] Perplexity found %d citations for POI %d (json=%s)",
-                        len(result.citations), poi.point_id, research_data is not None and "summary" not in research_data)
+            logger.info("[poi-researcher] Perplexity found %d citations for POI %d (json=%s, dropped_banned=%d)",
+                        len(result.citations), poi.point_id,
+                        research_data is not None and "summary" not in research_data, dropped)
 
     # Strategy 2: Tavily/Brave search + GPT-4o-mini summarization
     if research_data is None:
@@ -129,16 +157,18 @@ async def _research_poi(poi: backend_client.POIResearchTask) -> list[dict]:
         search_resp = await web_search.search(query)
 
         if search_resp and search_resp.results:
-            sources = [
+            raw_sources = [
                 {"url": r.url, "title": r.title, "snippet": r.content[:200]}
                 for r in search_resp.results
             ]
+            sources = _filter_sources(raw_sources)
+            dropped = len(raw_sources) - len(sources)
             ai_provider = f"{search_resp.provider}+gpt"
 
             context = web_search.format_search_context(search_resp)
             research_data = await _summarize_with_gpt(poi.name, poi.city, poi.point_type, context)
-            logger.info("[poi-researcher] %s found %d results for POI %d",
-                        search_resp.provider, len(search_resp.results), poi.point_id)
+            logger.info("[poi-researcher] %s found %d results for POI %d (dropped_banned=%d)",
+                        search_resp.provider, len(search_resp.results), poi.point_id, dropped)
 
     # Strategy 3: GPT-4o-mini knowledge only (lowest confidence)
     if research_data is None:

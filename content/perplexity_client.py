@@ -67,7 +67,11 @@ You MUST write about THE VENUE ITSELF — its atmosphere, menu, service, locatio
 NEVER write a Wikipedia article about the literal meaning of the name.
 Example: "Бар «Лось»" is a BAR in Paris — write about the bar, NOT about the moose animal.
 Example: "Gym Hercules" is a GYM — write about the gym, NOT about the Greek demigod.
-If you cannot find information about the specific venue, return all fields as empty strings."""
+If you cannot find information about the specific venue, return all fields as empty strings.
+
+SOURCES POLICY:
+- Never cite or rely on Russian or Belarusian sources (.ru, .by, vk.com, ok.ru, yandex, mail.ru, ria.ru, tass, rbc.ru, rt.com, kp.ru, lenta.ru, rg.ru, sputniknews, etc.).
+- If a venue is located in Russia, Belarus, or in Russian-occupied Ukrainian territory (Crimea, occupied parts of Donetsk/Luhansk/Kherson/Zaporizhzhia oblasts) — return all fields as empty strings."""
 
 
 async def research_place(

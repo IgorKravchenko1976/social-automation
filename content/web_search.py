@@ -29,6 +29,32 @@ class SearchResponse:
     provider: str = ""
 
 
+# Russian / Belarusian / occupied-territory domains we want excluded from web search results.
+# Aligns with no-russian-domains.mdc policy.
+_EXCLUDED_DOMAINS_TAVILY = [
+    "ria.ru", "tass.ru", "rbc.ru", "rt.com", "kp.ru", "lenta.ru", "rg.ru",
+    "gazeta.ru", "kommersant.ru", "sputniknews.com", "yandex.ru", "yandex.com",
+    "mail.ru", "vk.com", "ok.ru", "rutube.ru",
+]
+
+_BANNED_TLDS = (".ru", ".by")
+_BANNED_HOSTS = (
+    "vk.com", "ok.ru", "yandex.", "mail.ru", "rutube.",
+    "ria.ru", "tass.", "rbc.ru", "rt.com", "kp.ru", "ria.", "lenta.ru",
+    "rg.ru", "gazeta.ru", "kommersant.ru", "sputniknews.",
+)
+
+
+def _is_banned_url(url: str) -> bool:
+    if not url:
+        return False
+    u = url.lower()
+    host = u.split("//", 1)[-1].split("/", 1)[0]
+    if host.endswith(_BANNED_TLDS):
+        return True
+    return any(b in host for b in _BANNED_HOSTS)
+
+
 async def search(query: str, max_results: int = 5) -> SearchResponse | None:
     """Search the web using Tavily first, then Brave as fallback.
 
@@ -37,14 +63,23 @@ async def search(query: str, max_results: int = 5) -> SearchResponse | None:
     if settings.tavily_api_key:
         result = await _tavily_search(query, max_results)
         if result and result.results:
-            return result
+            return _strip_banned(result)
 
     if settings.brave_search_api_key:
         result = await _brave_search(query, max_results)
         if result and result.results:
-            return result
+            return _strip_banned(result)
 
     return None
+
+
+def _strip_banned(resp: SearchResponse) -> SearchResponse:
+    before = len(resp.results)
+    resp.results = [r for r in resp.results if not _is_banned_url(r.url)]
+    dropped = before - len(resp.results)
+    if dropped:
+        logger.info("[web_search:%s] dropped %d banned-domain results", resp.provider, dropped)
+    return resp
 
 
 async def _tavily_search(query: str, max_results: int) -> SearchResponse | None:
@@ -58,6 +93,7 @@ async def _tavily_search(query: str, max_results: int) -> SearchResponse | None:
                     "search_depth": "advanced",
                     "include_raw_content": False,
                     "max_results": max_results,
+                    "exclude_domains": _EXCLUDED_DOMAINS_TAVILY,
                 },
             )
             resp.raise_for_status()
