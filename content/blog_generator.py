@@ -150,6 +150,7 @@ def generate_post_html(
     place_name: Optional[str] = None,
     translations: Optional[dict] = None,
     backend_event_id: Optional[int] = None,
+    pulse_event_id: Optional[int] = None,
 ) -> Path:
     """Generate a static HTML page for a single post. Returns the file path."""
 
@@ -233,6 +234,17 @@ def generate_post_html(
                 <path d="M2 9a3 3 0 013-3h14a3 3 0 013 3v2a3 3 0 00 0 6v2a3 3 0 01-3 3H5a3 3 0 01-3-3v-2a3 3 0 000-6V9z"/>
             </svg>
             Квитки: {escape(t_domain)}
+        </a>"""
+
+    pulse_html = ""
+    if pulse_event_id:
+        pulse_url = f"https://app.im-in.net/pulse/{pulse_event_id}"
+        pulse_html = f"""
+        <a class="post-source" href="{escape(pulse_url)}" target="_blank" rel="noopener" style="background:#EDE9FE;color:#7C3AED;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            Сторінка події
         </a>"""
 
     image_html = ""
@@ -467,6 +479,7 @@ def generate_post_html(
             </div>
             <div class="post-meta">
                 {geo_html}
+                {pulse_html}
                 {ticket_html}
                 {source_html}
             </div>
@@ -601,6 +614,7 @@ async def generate_all_published() -> list[Path]:
             place_name=post.place_name,
             translations=translations,
             backend_event_id=post.backend_event_id,
+            pulse_event_id=post.poi_point_id if post.source == "city_pulse" else None,
         )
         generated.append(page)
 

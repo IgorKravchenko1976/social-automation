@@ -257,7 +257,7 @@ def _ensure_link_suffix(post: Post, pub: Publication, platform: Platform) -> Non
     limits = PLATFORM_LIMITS.get(platform, {})
     if not limits.get("supports_links"):
         return
-    if "app.im-in.net/e/" in pub.content_adapted or "im-in.net/blog/post-" in pub.content_adapted:
+    if "app.im-in.net/e/" in pub.content_adapted or "im-in.net/blog/post-" in pub.content_adapted or "app.im-in.net/pulse/" in pub.content_adapted:
         return
 
     link_suffix = ""
@@ -560,7 +560,7 @@ async def _try_publish_post(
         ) or next(
             (p.content_adapted for p in publications if p.content_adapted), None,
         )
-        if best_text and (
+        if best_text and post.source != "city_pulse" and (
             post.source in ("poi", "web_news")
             or len(best_text) > len(post.content_raw or "")
         ):
@@ -589,10 +589,12 @@ async def _try_publish_post(
                     post_id=post.id, title=post.title or "",
                     content=post.content_raw or "", published_at=_pub_at,
                     image_url=_thumb_url, source_url=post.source_url,
+                    ticket_url=getattr(post, "ticket_url", None),
                     latitude=post.latitude, longitude=post.longitude,
                     place_name=post.place_name,
                     translations=_parse_translations(post.translations),
                     backend_event_id=post.backend_event_id,
+                    pulse_event_id=post.poi_point_id if post.source == "city_pulse" else None,
                 )
             except Exception:
                 logger.warning("Blog page generation failed for post_id=%d", post.id, exc_info=True)
