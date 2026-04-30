@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 ALL_PLATFORMS = configured_platforms()
 
 SLOT_CONTENT_TYPES = [
-    "web_news",    # 08:00  — fresh travel news (fallback: POI)
-    "web_news",    # 10:00  — fresh travel news (fallback: POI)
-    "web_news",    # 12:00  — fresh travel news (fallback: POI)
-    "web_news",    # 15:00  — fresh travel news (fallback: POI)
-    "web_news",    # 18:00  — fresh travel news (fallback: POI)
+    "web_news",       # 08:00  — fresh travel news (fallback: POI)
+    "poi_spotlight",  # 10:00  — POI / interesting place on the map
+    "web_news",       # 12:00  — fresh travel news (fallback: POI)
+    "feature",        # 15:00  — app feature highlight (1/day)
+    "web_news",       # 18:00  — fresh travel news (fallback: POI)
 ]
 
 MAX_TERRITORY_RETRIES = 3
