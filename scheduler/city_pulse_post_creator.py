@@ -20,9 +20,8 @@ Bot-side gates here:
   - Skip if title or description is too short
   - Skip if the only language available is non-Ukrainian (leave to fixer)
 
-The 5-minute interval gives natural pacing (1 event per cycle = 12
-posts/hour max). Realistic volume is much lower since the bot processes
-1 event at a time.
+The 5-minute interval gives natural pacing (1 event per cycle). A daily
+cap of MAX_CITY_PULSE_POSTS_PER_DAY prevents over-posting.
 """
 from __future__ import annotations
 
@@ -45,6 +44,8 @@ logger = logging.getLogger(__name__)
 _lock = asyncio.Lock()
 ALL_PLATFORMS = configured_platforms()
 
+MAX_CITY_PULSE_POSTS_PER_DAY = 16
+
 # Backend base + sync key are reused from settings — same auth as other
 # /research/* and /city-pulse/* endpoints in the bot.
 REQUEST_TIMEOUT = 30
@@ -52,6 +53,22 @@ REQUEST_TIMEOUT = 30
 
 def _backend_configured() -> bool:
     return bool(settings.imin_backend_api_base and settings.imin_backend_sync_key)
+
+
+async def _count_city_pulse_posts_today() -> int:
+    """Count city_pulse posts created today (UTC)."""
+    from datetime import date, datetime, timezone
+
+    today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
+    async with async_session() as session:
+        from sqlalchemy import func
+        result = await session.execute(
+            select(func.count(Post.id)).where(
+                Post.source == "city_pulse",
+                Post.created_at >= today_start,
+            )
+        )
+        return result.scalar() or 0
 
 
 def _backend_headers() -> dict[str, str]:
@@ -277,6 +294,11 @@ async def process_city_pulse_post() -> bool:
     async with _lock:
         if not _backend_configured():
             logger.debug("[city-pulse-post] backend not configured")
+            return False
+
+        today_count = await _count_city_pulse_posts_today()
+        if today_count >= MAX_CITY_PULSE_POSTS_PER_DAY:
+            logger.debug("[city-pulse-post] daily limit reached (%d/%d)", today_count, MAX_CITY_PULSE_POSTS_PER_DAY)
             return False
 
         try:
