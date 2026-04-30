@@ -1,13 +1,9 @@
 """Admin API endpoints (require X-API-Key authentication)."""
 from __future__ import annotations
 
-import gzip
-import subprocess
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -327,40 +323,3 @@ async def emergency_delete_action(body: dict):
 
     result = await emergency_delete(search_text)
     return result
-
-
-# ── Migration helper (one-shot, REMOVE after Railway → VPS migration) ────────
-
-@admin_router.get("/migration/sqlite-dump")
-async def export_sqlite_dump():
-    """Return a gzipped SQL dump of the SQLite database file.
-
-    Used ONCE during the Railway → VPS migration to copy posts/publications
-    history to the new Postgres instance. Requires X-API-Key (admin auth).
-
-    Strictly no-op when the active DB is not SQLite.
-    """
-    db_url = settings.database_url
-    if not db_url.startswith("sqlite"):
-        raise HTTPException(400, f"active DB is not SQLite: {db_url[:40]}...")
-
-    db_path = db_url.split("///", 1)[-1]
-    if not Path(db_path).is_file():
-        raise HTTPException(404, f"SQLite file not found: {db_path}")
-
-    try:
-        proc = subprocess.run(
-            ["sqlite3", db_path, ".dump"],
-            capture_output=True, check=True, timeout=120,
-        )
-    except FileNotFoundError:
-        raise HTTPException(500, "sqlite3 binary not available in container")
-    except subprocess.CalledProcessError as exc:
-        raise HTTPException(500, f"sqlite dump failed: {exc.stderr.decode()[:200]}")
-
-    payload = gzip.compress(proc.stdout)
-    return Response(
-        content=payload,
-        media_type="application/gzip",
-        headers={"Content-Disposition": "attachment; filename=social.sql.gz"},
-    )
