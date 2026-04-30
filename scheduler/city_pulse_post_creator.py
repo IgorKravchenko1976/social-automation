@@ -34,7 +34,7 @@ import httpx
 
 from sqlalchemy import select
 
-from config.platforms import configured_platforms
+from config.platforms import Platform, configured_platforms
 from config.settings import settings
 from db.database import async_session
 from db.models import Post, Publication
@@ -42,7 +42,14 @@ from db.models import Post, Publication
 logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
-ALL_PLATFORMS = configured_platforms()
+# Instagram is intentionally excluded from City Pulse fan-out:
+#   1) IG cannot include the ticket / source link in caption (`supports_links: false`),
+#      which kills conversion for cultural events.
+#   2) IG hard API cap is 25/24h and shadowban risk rises sharply when a single
+#      vertical (City Pulse) saturates the queue.
+# City Pulse posts go to Telegram + Facebook; tourism / news / feature posts
+# still cover all configured platforms.
+CITY_PULSE_PLATFORMS = [p for p in configured_platforms() if p != Platform.INSTAGRAM]
 
 MAX_CITY_PULSE_POSTS_PER_DAY = 16
 
@@ -384,7 +391,7 @@ async def process_city_pulse_post() -> bool:
                 session.add(post)
                 await session.flush()
 
-                for platform in ALL_PLATFORMS:
+                for platform in CITY_PULSE_PLATFORMS:
                     session.add(Publication(post_id=post.id, platform=platform.value))
 
                 # Translations come pre-baked from city_events.translations
