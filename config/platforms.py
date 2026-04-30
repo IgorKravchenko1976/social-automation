@@ -97,6 +97,18 @@ PLATFORM_DAILY_LIMITS = {
     Platform.TIKTOK: 5,
 }
 
+# Per-platform minimum spacing (minutes) between consecutive PUBLISHED posts.
+# Prevents bursts that look like spam to FB / IG anti-spam systems.
+# When the publisher cycle (15 min) finds the spacing is too tight, the
+# publication is kept QUEUED and re-attempted on the next cycle.
+PLATFORM_MIN_SPACING_MINUTES = {
+    Platform.TELEGRAM: 0,    # TG tolerates frequent posts
+    Platform.FACEBOOK: 60,   # 60 min keeps reach healthy
+    Platform.INSTAGRAM: 60,  # 60 min keeps shadowban risk low
+    Platform.TWITTER: 10,
+    Platform.TIKTOK: 30,
+}
+
 PLATFORM_LIMITS = {
     Platform.TELEGRAM: {
         "max_text_length": 4096,
