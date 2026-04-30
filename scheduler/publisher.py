@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.platforms import Platform, PLATFORM_LIMITS, get_platform_instance
+from config.platforms import Platform, PLATFORM_DAILY_LIMITS, PLATFORM_LIMITS, get_platform_instance
 from config.settings import settings, get_today_start_utc
 from content.generator import (
     generate_post_text, build_map_link, translate_post,
@@ -419,6 +419,22 @@ async def count_published_today() -> int:
         return result.scalar() or 0
 
 
+async def _count_published_today_for_platform(
+    session: AsyncSession, platform: Platform
+) -> int:
+    """How many publications were already PUBLISHED on this platform today (UTC)."""
+    today_start_utc = get_today_start_utc()
+    result = await session.execute(
+        select(sa_func.count(Publication.id))
+        .where(
+            Publication.platform == platform.value,
+            Publication.status == PostStatus.PUBLISHED,
+            Publication.published_at >= today_start_utc,
+        )
+    )
+    return result.scalar() or 0
+
+
 # ---------------------------------------------------------------------------
 # Main entry: publish a scheduled slot
 # ---------------------------------------------------------------------------
@@ -521,6 +537,26 @@ async def _try_publish_post(
             if pub.status == PostStatus.FAILED:
                 continue
             platform = Platform(pub.platform)
+
+            # Anti-ban / anti-shadowban: skip if platform already hit its
+            # safe daily cap (see PLATFORM_DAILY_LIMITS rationale).
+            daily_cap = PLATFORM_DAILY_LIMITS.get(platform)
+            if daily_cap is not None:
+                published_today = await _count_published_today_for_platform(session, platform)
+                if published_today >= daily_cap:
+                    pub.status = PostStatus.FAILED
+                    pub.error_message = (
+                        f"daily_platform_limit_reached ({published_today}/{daily_cap})"
+                    )
+                    post.log_pipeline(
+                        "publish", "skip",
+                        f"{platform.value}: skipped — daily cap {daily_cap} reached",
+                    )
+                    logger.info(
+                        "=== PUBLISH === Skipping %s post_id=%d — daily cap %d/%d reached",
+                        platform.value, post.id, published_today, daily_cap,
+                    )
+                    continue
 
             if platform == Platform.INSTAGRAM and not image_path and post.source in ("poi", "city_pulse"):
                 pub.status = PostStatus.FAILED

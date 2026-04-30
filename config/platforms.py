@@ -80,6 +80,23 @@ PLATFORM_ICONS = {
 
 EMPTY_STATS = dict(subscribers=0, posts=0, comments=0, views=0, likes=0, dislikes=0)
 
+# Per-platform anti-ban / shadowban daily caps for OUTGOING publications.
+# These are conservative thresholds well below the platforms' hard API limits;
+# the goal is to keep accounts in good standing, not to maximise throughput.
+#   Telegram: TG does not penalise high volume — 50 is a safety upper bound.
+#   Facebook: ~10/day keeps reach healthy; FB throttles spammy pages aggressively.
+#   Instagram: hard API ceiling is 25/24h; shadowban risk rises sharply >10/day,
+#              so we cap at 8 with ≥1h spacing implicit via slot/cycle scheduling.
+#   Twitter: well below Free tier 50/day write cap.
+#   TikTok: bot rarely posts video — keep low.
+PLATFORM_DAILY_LIMITS = {
+    Platform.TELEGRAM: 50,
+    Platform.FACEBOOK: 10,
+    Platform.INSTAGRAM: 8,
+    Platform.TWITTER: 30,
+    Platform.TIKTOK: 5,
+}
+
 PLATFORM_LIMITS = {
     Platform.TELEGRAM: {
         "max_text_length": 4096,
