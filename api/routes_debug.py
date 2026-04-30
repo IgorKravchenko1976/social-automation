@@ -176,7 +176,7 @@ async def public_blog_sync():
 
 @debug_router.get("/debug/blog-delete-vps/{post_id}")
 async def blog_delete_from_vps(post_id: int):
-    """Delete a specific blog post from VPS and local Railway storage."""
+    """Delete a specific blog post from VPS html dir and local data/blog cache."""
     from scheduler.emergency_delete import _sftp_delete_post
     from pathlib import Path
     import json as _json
@@ -648,7 +648,7 @@ async def telethon_send_code(phone: str):
     api_id = settings.telegram_api_id
     api_hash = settings.telegram_api_hash
     if not api_id or not api_hash:
-        return {"ok": False, "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH not configured on Railway"}
+        return {"ok": False, "error": "TELEGRAM_API_ID / TELEGRAM_API_HASH not configured in .env"}
 
     try:
         client = TelegramClient(StringSession(), int(api_id), api_hash)

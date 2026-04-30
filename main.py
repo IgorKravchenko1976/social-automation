@@ -284,22 +284,7 @@ async def _safe(coro, label: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bot_mode = (settings.bot_mode or "monitoring").lower()
-
-    if bot_mode == "monitoring":
-        # Lightweight monitoring mode (Railway): FastAPI only.
-        # No scheduler, no Telegram polling, no DB init, no jobs.
-        # Used so a UptimeRobot ping still gets HTTP 200 from the legacy URL,
-        # while the real bot lives on the VPS in "full" mode.
-        logger.warning(
-            "BOT_MODE=monitoring — schedulers/polling/DB init DISABLED. "
-            "Set BOT_MODE=full in env to enable the full bot."
-        )
-        yield
-        logger.info("Monitoring instance stopped.")
-        return
-
-    logger.info("BOT_MODE=full — running schedulers, Telegram polling, all jobs.")
+    logger.info("Starting bot — schedulers, Telegram polling, all jobs.")
     logger.info("Initializing database...")
     await init_db()
 
@@ -383,21 +368,12 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 @app.get("/")
 async def root():
-    bot_mode = (settings.bot_mode or "monitoring").lower()
-    payload = {
+    return {
         "service": "Social Media Automation",
         "status": "running",
-        "mode": bot_mode,
+        "post_schedule": settings.post_schedule,
+        "timezone": settings.timezone,
     }
-    if bot_mode == "full":
-        payload["post_schedule"] = settings.post_schedule
-        payload["timezone"] = settings.timezone
-    else:
-        payload["note"] = (
-            "monitoring instance — bot logic runs on the VPS deploy. "
-            "This URL is kept alive only for UptimeRobot."
-        )
-    return payload
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ async def main():
     await client.start()
     session = client.session.save()
     print("\n\n========================================")
-    print("TELEGRAM_SESSION value for Railway:")
+    print("TELEGRAM_SESSION value for /opt/imin/.env on the VPS:")
     print("========================================")
     print(session)
     print("========================================\n")

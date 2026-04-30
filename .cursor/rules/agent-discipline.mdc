@@ -70,7 +70,7 @@ If your work reveals new patterns, constraints, or gotchas:
 - Match naming conventions already used in the codebase
 - Keep async patterns consistent (httpx, aiosqlite)
 - Test changes don't break the scheduler
-- Check Railway deployment compatibility (Docker, /data volume)
+- Check VPS deployment compatibility (Docker, /data bind-mount, postgres URL)
 
 ## Rule maintenance — living documentation
 

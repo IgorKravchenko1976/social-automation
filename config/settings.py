@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     app_description: str = "An awesome application"
     app_website: str = "https://example.com"
 
-    # Email reports (Resend HTTP API — works on Railway without SMTP)
+    # Email reports (Resend HTTP API — chosen historically because the bot
+    # used to run on Railway where outbound SMTP was blocked; kept on VPS
+    # for parity with existing email templates).
     resend_api_key: str = ""
     report_email_from: str = "I'M IN Reports <onboarding@resend.dev>"
     report_email_to: str = ""
@@ -64,7 +66,9 @@ class Settings(BaseSettings):
     # Admin API key (required for all write/admin endpoints)
     admin_api_key: str = ""
 
-    # VPS for blog sync (optional — if not set, blog pages stay on Railway only)
+    # VPS SSH for blog sync (legacy — kept for emergency fallback only.
+    # The bot now lives on the VPS itself and writes blog HTML to a
+    # bind-mounted dir, so SSH credentials are unused in normal operation).
     vps_ssh_host: str = ""
     vps_ssh_port: int = 22
     vps_ssh_user: str = "dmytros"
@@ -94,15 +98,9 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = "9BWtsMINqrJLrRacOk9x"  # Aria — universal female
     elevenlabs_model_id: str = "eleven_multilingual_v2"
 
-    # Persistent data directory (mount Railway Volume here)
+    # Persistent data directory (bind-mounted from VPS host into the
+    # imin-bot container — see imin-backend docker-compose.yml).
     data_dir: str = "/data"
-
-    # Operational mode:
-    #   "full"        — schedulers, Telegram polling, all jobs (VPS deploy)
-    #   "monitoring"  — FastAPI only, no scheduler/polling/jobs (Railway)
-    # Default is intentionally "monitoring" so a Railway deploy never
-    # accidentally double-publishes if BOT_MODE is missed in env.
-    bot_mode: str = "monitoring"
 
     # Database
     database_url: str = ""

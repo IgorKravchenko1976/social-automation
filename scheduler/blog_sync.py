@@ -3,7 +3,7 @@
 Пріоритет доставки:
 1. API **imin-backend** (`MARKETING_PUBLISH_API_*`) — бекенд пише у каталог nginx.
 2. **SFTP** (`VPS_SSH_*`) — застарілий шлях, якщо API-ключ не заданий.
-3. Лише локально (`data/blog` на Railway), якщо немає ні API, ні SFTP.
+3. Лише локально (`data/blog` у data-volume бота), якщо немає ні API, ні SFTP.
 """
 from __future__ import annotations
 
