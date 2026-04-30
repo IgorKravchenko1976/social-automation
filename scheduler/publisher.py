@@ -404,7 +404,7 @@ async def _cleanup_post_media(session: AsyncSession, post: Post) -> None:
 # ---------------------------------------------------------------------------
 
 async def count_published_today() -> int:
-    """Count distinct posts published today (across all platforms)."""
+    """Count distinct scheduled posts published today (excludes city_pulse)."""
     today_start_utc = get_today_start_utc()
     async with async_session() as session:
         result = await session.execute(
@@ -413,6 +413,7 @@ async def count_published_today() -> int:
             .where(
                 Post.created_at >= today_start_utc,
                 Publication.status == PostStatus.PUBLISHED,
+                Post.source != "city_pulse",
             )
         )
         return result.scalar() or 0
