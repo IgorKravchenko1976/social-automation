@@ -10,7 +10,13 @@ from typing import Optional
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.platforms import Platform, PLATFORM_DAILY_LIMITS, PLATFORM_LIMITS, get_platform_instance
+from config.platforms import (
+    Platform,
+    PLATFORM_DAILY_LIMITS,
+    PLATFORM_LIMITS,
+    PLATFORM_MIN_SPACING_MINUTES,
+    get_platform_instance,
+)
 from config.settings import settings, get_today_start_utc
 from content.generator import (
     generate_post_text, build_map_link, translate_post,
@@ -435,6 +441,26 @@ async def _count_published_today_for_platform(
     return result.scalar() or 0
 
 
+async def _minutes_since_last_publish_for_platform(
+    session: AsyncSession, platform: Platform
+) -> Optional[float]:
+    """Minutes since last successful publication on this platform, or None if never."""
+    result = await session.execute(
+        select(sa_func.max(Publication.published_at))
+        .where(
+            Publication.platform == platform.value,
+            Publication.status == PostStatus.PUBLISHED,
+        )
+    )
+    last_at = result.scalar()
+    if last_at is None:
+        return None
+    if last_at.tzinfo is None:
+        last_at = last_at.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - last_at
+    return delta.total_seconds() / 60.0
+
+
 # ---------------------------------------------------------------------------
 # Main entry: publish a scheduled slot
 # ---------------------------------------------------------------------------
@@ -555,6 +581,25 @@ async def _try_publish_post(
                     logger.info(
                         "=== PUBLISH === Skipping %s post_id=%d — daily cap %d/%d reached",
                         platform.value, post.id, published_today, daily_cap,
+                    )
+                    continue
+
+            # Anti-burst spacing: keep at least N minutes since the last
+            # successful publication on this platform. Publication stays
+            # QUEUED and the next cycle (~15 min) will retry.
+            min_spacing = PLATFORM_MIN_SPACING_MINUTES.get(platform, 0)
+            if min_spacing > 0:
+                minutes_since = await _minutes_since_last_publish_for_platform(session, platform)
+                if minutes_since is not None and minutes_since < min_spacing:
+                    post.log_pipeline(
+                        "publish", "defer",
+                        f"{platform.value}: deferred — last post {minutes_since:.0f} min ago "
+                        f"(min spacing {min_spacing} min)",
+                    )
+                    logger.info(
+                        "=== PUBLISH === Deferring %s post_id=%d — last published %.0f min ago "
+                        "(min spacing %d min); pub stays QUEUED",
+                        platform.value, post.id, minutes_since, min_spacing,
                     )
                     continue
 
