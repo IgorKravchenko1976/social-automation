@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     # Persistent data directory (mount Railway Volume here)
     data_dir: str = "/data"
 
+    # Operational mode:
+    #   "full"        — schedulers, Telegram polling, all jobs (VPS deploy)
+    #   "monitoring"  — FastAPI only, no scheduler/polling/jobs (Railway)
+    # Default is intentionally "monitoring" so a Railway deploy never
+    # accidentally double-publishes if BOT_MODE is missed in env.
+    bot_mode: str = "monitoring"
+
     # Database
     database_url: str = ""
 
