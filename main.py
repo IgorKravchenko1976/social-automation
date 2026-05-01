@@ -177,6 +177,10 @@ def _setup_scheduler() -> None:
                           id="city_pulse_fetch_queue", replace_existing=True)
         scheduler.add_job(process_city_pulse_voice, "interval", minutes=3,
                           id="city_pulse_voice_queue", replace_existing=True)
+
+        from geo_agent.city_pulse_enrich import process_city_pulse_enrich
+        scheduler.add_job(process_city_pulse_enrich, "interval", minutes=3,
+                          id="city_pulse_enrich_queue", replace_existing=True)
         logger.info(
             "[city-pulse] Discover/verify/fetch/voice loops scheduled "
             "(discover=10m, verify=4m, fetch=6m, voice=3m)"

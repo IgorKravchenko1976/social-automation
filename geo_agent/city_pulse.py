@@ -422,7 +422,7 @@ Category mapping cheat sheet (when source content is in Ukrainian / English):
     {
       "externalId": "stable id from source (URL/permalink/slug) — MUST be present",
       "title": "Short title in source language",
-      "description": "1-3 sentence overview",
+      "description": "RICH 3-7 sentence overview (180-600 chars). Cover what's on stage, who is performing or what is shown, why it matters, atmosphere, target audience, programme highlights. Pull every concrete detail from the page: programme list, composer/artist names, set list, theme, run time. NEVER ship a stub like 'Concert in two parts.' — if the page truly has no details, write at least 2 sentences that describe the format and venue context (e.g. 'Organ recital at Odesa National Opera. The two-part programme features ...'). Stay factual, do not invent.",
       "category": "cinema|theater|concert|exhibition|sale|festival|workshop|tour|sport",
       "startsAt": "RFC3339 UTC, e.g. 2026-05-14T19:30:00Z",
       "endsAt": "RFC3339 UTC or null",
@@ -471,6 +471,11 @@ Rules:
   Leave empty if not mentioned.
 - whatToBring: extract recommendations about dress code, equipment, documents.
   Leave empty if not mentioned.
+- description LENGTH IS MANDATORY: target 180-600 characters. A 1-line stub
+  ("Concert in two parts.", "Live show", "Виставка") is REJECTED — re-read
+  the source page and pull every concrete detail you can find: programme,
+  composer/artist names, languages, set list, theme of the exhibition,
+  what the workshop covers, why a tourist would attend.
 - Return ONLY JSON, no commentary."""
 
 
