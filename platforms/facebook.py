@@ -115,7 +115,9 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
                     params={
                         "access_token": self._token,
                         "fields": "id,comments.limit(50){id,from,message,created_time}",
-                        "limit": 10,
+                        # 16+ posts/day → cover ~2 days of feed so late comments
+                        # still get picked up by the 15-min poll cycle.
+                        "limit": 30,
                     },
                     label="FB get_messages",
                 )
@@ -151,7 +153,18 @@ class FacebookPlatform(TokenPlatformMixin, BasePlatform):
                     label="FB send_reply",
                 )
                 if "error" in data:
-                    logger.error("Facebook reply error: %s", data["error"])
+                    err = data["error"]
+                    code = err.get("code")
+                    sub = err.get("error_subcode")
+                    # Permanent: comment/post deleted or unsupported post target.
+                    # Mark as replied to stop infinite retry loops.
+                    if code in (33, 100, 200) or sub in (33,):
+                        logger.warning(
+                            "Facebook reply skipped (permanent error %s/%s, msg=%s): %s",
+                            code, sub, platform_message_id, err.get("message"),
+                        )
+                        return True
+                    logger.error("Facebook reply error: %s", err)
                     return False
                 return True
         except Exception:
