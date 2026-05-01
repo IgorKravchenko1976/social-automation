@@ -1312,6 +1312,68 @@ async def submit_event_enrichment(
     return True
 
 
+async def submit_post_published_writeback(
+    *,
+    target: str,
+    event_id: int,
+    description: str = "",
+    translations: dict | None = None,
+    photo_url: str = "",
+    social_links: dict | None = None,
+    extra_sources: list[dict] | None = None,
+) -> bool:
+    """POST writeback after a successful publication.
+
+    `target` chooses which backend table to update:
+      - "city_pulse" → /v1/api/city-pulse/post-published-writeback (city_events.id)
+      - "event"      → /v1/api/events/post-published-writeback     (events.entity_id)
+    """
+    if not is_configured() or event_id <= 0:
+        return False
+
+    if target == "city_pulse":
+        path = "/v1/api/city-pulse/post-published-writeback"
+    elif target == "event":
+        path = "/v1/api/events/post-published-writeback"
+    else:
+        logger.warning("[writeback] unknown target %r", target)
+        return False
+
+    payload: dict = {"eventId": event_id}
+    if description:
+        payload["description"] = description
+    if translations:
+        payload["translations"] = translations
+    if photo_url:
+        payload["photoUrl"] = photo_url
+    if social_links:
+        payload["socialLinks"] = social_links
+    if extra_sources:
+        payload["extraSources"] = extra_sources
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}{path}",
+            headers=_headers(),
+            json=payload,
+        )
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.warning(
+                "[writeback] %s event=%d failed: %s %s",
+                target, event_id, resp.status_code, resp.text[:300],
+            )
+            return False
+    logger.info(
+        "[writeback] %s event=%d: desc=%d, +%d translations, photo=%s, links=%s",
+        target, event_id, len(description),
+        len(translations or {}), bool(photo_url),
+        ",".join((social_links or {}).keys()),
+    )
+    return True
+
+
 async def fetch_pending_voice_jobs(lang: str, limit: int = 5) -> list[CityPulseVoiceJob]:
     """GET /v1/api/city-pulse/pending-voice — events needing narration in `lang`.
 
