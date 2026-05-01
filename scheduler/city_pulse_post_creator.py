@@ -280,8 +280,21 @@ def _format_city_event_for_post(event: dict) -> tuple[str, str]:
     if app_link:
         parts.append(f"📲 Деталі в I'M IN: {app_link}")
 
-    source_name = (event.get("sourceName") or "").strip()
-    parts.append(f"\n📋 Дані: IM-IN Pulse{' / ' + source_name if source_name else ''}")
+    # Multi-source attribution: backend now collapses duplicates across
+    # different source sites into one canonical city_event and returns the
+    # full source list under "sources". Fallback to the legacy single
+    # sourceName field for events created before migration 117.
+    source_names: list[str] = []
+    for s in event.get("sources") or []:
+        nm = (s.get("name") or "").strip()
+        if nm and nm not in source_names:
+            source_names.append(nm)
+    if not source_names:
+        legacy = (event.get("sourceName") or "").strip()
+        if legacy:
+            source_names.append(legacy)
+    suffix = " / " + " + ".join(source_names) if source_names else ""
+    parts.append(f"\n📋 Дані: IM-IN Pulse{suffix}")
     city_name = (event.get("city") or "").strip()
     parts.append(f"#Афіша{' #' + city_name if city_name else ''}")
 
