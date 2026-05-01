@@ -63,10 +63,10 @@ def _backend_configured() -> bool:
 
 
 async def _count_city_pulse_posts_today() -> int:
-    """Count city_pulse posts created today (UTC)."""
-    from datetime import date, datetime, timezone
+    """Count city_pulse posts created today (project timezone)."""
+    from config.settings import get_today_start_utc
 
-    today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
+    today_start = get_today_start_utc()
     async with async_session() as session:
         from sqlalchemy import func
         result = await session.execute(

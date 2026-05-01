@@ -8,6 +8,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config.settings import utcnow_naive
 from db.models import RSSSource, Post
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ async def parse_all_sources(session: AsyncSession) -> list[dict]:
                     new_entries.append(entry)
                     existing_urls.add(entry["link"])
 
-            source.last_fetched_at = datetime.now(timezone.utc)
+            source.last_fetched_at = utcnow_naive()
         except Exception:
             logger.exception("Failed to fetch RSS source %s", source.name)
 

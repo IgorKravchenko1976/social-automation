@@ -132,6 +132,21 @@ settings = Settings()
 
 # ── Shared date/time helpers (used throughout the project) ────────────────────
 
+def utcnow_naive() -> "datetime":
+    """Current UTC time as a naive datetime.
+
+    Postgres columns in this project are `TIMESTAMP WITHOUT TIME ZONE`
+    (a SQLite-era choice that survived the migration). asyncpg refuses
+    to bind tz-aware values against such columns and raises
+    `can't subtract offset-naive and offset-aware datetimes`. Use this
+    helper anywhere a value is going to be persisted or compared with
+    one of those columns; keep `datetime.now(timezone.utc)` only for
+    pure-Python arithmetic / token expiry checks.
+    """
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def get_today_start_utc() -> "datetime":
     """Return midnight of today (in project timezone) as a naive UTC datetime."""
     from datetime import datetime, timezone

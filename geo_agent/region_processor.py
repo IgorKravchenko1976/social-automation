@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, func as sa_func
 
+from config.settings import utcnow_naive
 from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent import backend_client
@@ -37,7 +38,7 @@ _SEED_AUDIT_PREFIX = "region_seed:"
 
 async def _count_region_processed_last_24h() -> int:
     """Count region tasks completed in the last 24 hours (local DB audit)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = utcnow_naive() - timedelta(hours=24)
     async with async_session() as session:
         result = await session.execute(
             select(sa_func.count(GeoResearchTask.id)).where(
@@ -64,15 +65,16 @@ async def _log_audit(
     """Save a record of region task processing to local DB for audit."""
     try:
         async with async_session() as session:
+            now = utcnow_naive()
             task = GeoResearchTask(
-                request_id=f"region_{name}_{int(datetime.now(timezone.utc).timestamp())}",
+                request_id=f"region_{name}_{int(now.timestamp())}",
                 latitude=lat,
                 longitude=lng,
                 name=f"{prefix}{name}",
                 language="uk",
                 status=status,
-                received_at=datetime.now(timezone.utc),
-                completed_at=datetime.now(timezone.utc),
+                received_at=now,
+                completed_at=now,
                 result=json.dumps(result_data, ensure_ascii=False) if result_data else None,
                 error_message=error,
             )

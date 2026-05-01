@@ -22,6 +22,7 @@ from api.schemas import (
     GeoResearchQueueStatus,
     GeoResearchTaskOut,
 )
+from config.settings import utcnow_naive
 from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent.processor import DAILY_LIMIT
@@ -41,7 +42,7 @@ geo_router = APIRouter(
 async def geo_research_status():
     """Check queue capacity. External client polls this once per hour
     to decide whether to submit new geodata."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = utcnow_naive() - timedelta(hours=24)
 
     async with async_session() as session:
         queued = (await session.execute(
@@ -105,7 +106,7 @@ async def get_completed_research():
 async def submit_geo_research(req: GeoResearchRequest):
     """Add a geodata research request to the queue.
     Returns 429 if queue is full or daily limit reached."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = utcnow_naive() - timedelta(hours=24)
 
     async with async_session() as session:
         queued = (await session.execute(
@@ -132,7 +133,7 @@ async def submit_geo_research(req: GeoResearchRequest):
         raise HTTPException(429, "Досягнуто ліміт 10 запитів за 24 години")
 
     request_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    now = utcnow_naive()
 
     task = GeoResearchTask(
         request_id=request_id,

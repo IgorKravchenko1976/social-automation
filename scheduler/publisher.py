@@ -17,7 +17,7 @@ from config.platforms import (
     PLATFORM_MIN_SPACING_MINUTES,
     get_platform_instance,
 )
-from config.settings import settings, get_today_start_utc
+from config.settings import settings, get_today_start_utc, utcnow_naive
 from content.generator import (
     generate_post_text, build_map_link, translate_post,
     extract_location_coordinates, BlockedTerritoryError,
@@ -350,7 +350,7 @@ async def _publish_single(
         if result.success:
             pub.status = PostStatus.PUBLISHED
             pub.platform_post_id = result.platform_post_id
-            pub.published_at = datetime.now(timezone.utc)
+            pub.published_at = utcnow_naive()
             post.log_pipeline("publish", "ok",
                               f"{platform.value}: published, id={result.platform_post_id}")
             logger.info("=== PUBLISH === OK %s post_id=%d platform_post_id=%s",

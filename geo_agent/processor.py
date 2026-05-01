@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, func as sa_func
 
+from config.settings import utcnow_naive
 from db.database import async_session
 from db.models import GeoResearchTask, GeoResearchStatus
 from geo_agent.researcher import research_location
@@ -30,7 +31,7 @@ _lock = asyncio.Lock()
 
 async def _count_processed_last_24h() -> int:
     """Count tasks completed (or emptied) in the last 24 hours (local DB)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = utcnow_naive() - timedelta(hours=24)
     async with async_session() as session:
         result = await session.execute(
             select(sa_func.count(GeoResearchTask.id)).where(
@@ -74,8 +75,8 @@ async def _log_to_local_db(
                 name=f"backend:{research_code}",
                 language="uk",
                 status=status,
-                received_at=datetime.now(timezone.utc),
-                completed_at=datetime.now(timezone.utc),
+                received_at=utcnow_naive(),
+                completed_at=utcnow_naive(),
                 result=json.dumps(result_data, ensure_ascii=False) if result_data else None,
                 error_message=error,
             )
@@ -341,7 +342,7 @@ async def _process_local_task() -> bool:
 
         async with async_session() as session:
             db_task = await session.get(GeoResearchTask, task.id)
-            now = datetime.now(timezone.utc)
+            now = utcnow_naive()
             if result is None:
                 db_task.status = GeoResearchStatus.EMPTY
                 db_task.completed_at = now
@@ -359,7 +360,7 @@ async def _process_local_task() -> bool:
             db_task = await session.get(GeoResearchTask, task.id)
             db_task.status = GeoResearchStatus.FAILED
             db_task.error_message = str(exc)[:1000]
-            db_task.completed_at = datetime.now(timezone.utc)
+            db_task.completed_at = utcnow_naive()
             await session.commit()
         return False
 

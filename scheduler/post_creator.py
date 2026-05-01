@@ -46,8 +46,9 @@ MAX_TERRITORY_RETRIES = 3
 
 async def _get_recent_titles(session: AsyncSession, days: int = 60) -> list[str]:
     """Fetch post titles from the last N days for uniqueness checks."""
-    from datetime import datetime, timezone, timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    from datetime import timedelta
+    from config.settings import utcnow_naive
+    cutoff = utcnow_naive() - timedelta(days=days)
     result = await session.execute(
         select(Post.title)
         .where(Post.created_at >= cutoff, Post.title.isnot(None))

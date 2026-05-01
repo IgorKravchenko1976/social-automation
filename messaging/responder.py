@@ -157,8 +157,9 @@ async def _find_post_context(session: AsyncSession, msg: Message) -> str:
     platform within the last 3 days.
     """
     try:
-        from datetime import timedelta, datetime, timezone
-        cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+        from datetime import timedelta
+        from config.settings import utcnow_naive
+        cutoff = utcnow_naive() - timedelta(days=3)
 
         thread = msg.thread_id or ""
 

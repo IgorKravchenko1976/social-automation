@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select, func as sa_func
 
-from config.settings import settings, get_today_start_utc, get_now_local, parse_slot_time
+from config.settings import settings, get_today_start_utc, get_now_local, parse_slot_time, utcnow_naive
 from db.database import async_session
 from db.models import (
     Post, Publication, PostStatus,
@@ -115,7 +115,7 @@ async def run_health_check() -> None:
             select(sa_func.count(Message.id)).where(
                 Message.direction == MessageDirection.INCOMING,
                 Message.replied == False, Message.category != "spam",
-                Message.created_at < datetime.now(timezone.utc) - timedelta(hours=1),
+                Message.created_at < utcnow_naive() - timedelta(hours=1),
             )
         )).scalar() or 0
 
