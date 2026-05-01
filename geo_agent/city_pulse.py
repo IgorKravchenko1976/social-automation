@@ -689,7 +689,8 @@ def _safe_iso_datetime(v: Any) -> str | None:
         dt = datetime.fromisoformat(candidate)
     except (TypeError, ValueError):
         return None
-    # Re-emit in canonical RFC3339 so backend always sees the same shape.
-    if dt.tzinfo is None:
-        return dt.strftime("%Y-%m-%dT%H:%M:%S")
-    return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+    # Re-emit in canonical RFC3339. dt.isoformat() emits offsets as
+    # "+HH:MM" (with the colon) which is what Go's time.RFC3339 expects.
+    # Avoid strftime("%z") because Python emits "+HHMM" without colon
+    # and Go's parser rejects it.
+    return dt.isoformat()
