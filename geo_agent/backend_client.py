@@ -1218,6 +1218,100 @@ async def submit_enrichment(
     return True
 
 
+@dataclass
+class EventEnrichmentJob:
+    id: int
+    entity_id: int
+    title: str
+    description: str
+    latitude: float
+    longitude: float
+    address: str
+    city: str
+    country: str
+    content_language: str
+    facility_type: str
+
+
+async def fetch_next_event_enrichment_job() -> EventEnrichmentJob | None:
+    """GET /v1/api/events/next-to-enrich — pick one short researcher event."""
+    if not is_configured():
+        return None
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/events/next-to-enrich",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if data.get("empty"):
+        return None
+    j = data.get("job") or {}
+    if not j.get("id"):
+        return None
+    return EventEnrichmentJob(
+        id=j["id"],
+        entity_id=j.get("entityId", 0),
+        title=j.get("title", ""),
+        description=j.get("description", ""),
+        latitude=j.get("latitude", 0.0) or 0.0,
+        longitude=j.get("longitude", 0.0) or 0.0,
+        address=j.get("address", ""),
+        city=j.get("city", ""),
+        country=j.get("country", ""),
+        content_language=j.get("contentLanguage", "uk"),
+        facility_type=j.get("facilityType", ""),
+    )
+
+
+async def submit_event_enrichment(
+    event_id: int,
+    *,
+    description: str = "",
+    translations: dict | None = None,
+    address: str = "",
+    city: str = "",
+    country: str = "",
+    failed: bool = False,
+    fail_reason: str = "",
+) -> bool:
+    """POST /v1/api/events/update-enrichment — write back result."""
+    if not is_configured():
+        return False
+
+    payload: dict = {"eventId": event_id}
+    if failed:
+        payload["failed"] = True
+        if fail_reason:
+            payload["failReason"] = fail_reason
+    else:
+        payload["description"] = description
+        if translations:
+            payload["translations"] = translations
+        if address:
+            payload["address"] = address
+        if city:
+            payload["city"] = city
+        if country:
+            payload["country"] = country
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/events/update-enrichment",
+            headers=_headers(),
+            json=payload,
+        )
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.warning(
+                "[events-enrich] update %d failed: %s %s",
+                event_id, resp.status_code, resp.text[:300],
+            )
+            return False
+    return True
+
+
 async def fetch_pending_voice_jobs(lang: str, limit: int = 5) -> list[CityPulseVoiceJob]:
     """GET /v1/api/city-pulse/pending-voice — events needing narration in `lang`.
 
