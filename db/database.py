@@ -10,11 +10,26 @@ from db.models import Base
 _is_sqlite = settings.database_url.startswith("sqlite")
 _connect_args: dict = {"timeout": 30} if _is_sqlite else {}
 
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    connect_args=_connect_args,
-)
+# Production lesson (2026-05-01): without pool_pre_ping the bot would
+# happily try to reuse a Postgres connection that the server had
+# already closed (idle timeout / Docker network reset / etc.). The
+# next .commit() raised `asyncpg.InterfaceError: connection is closed`,
+# the session rolled back, and Publication.status stayed QUEUED.
+# Result: the publisher kept re-trying the same already-rejected post
+# every 15 min, blocking the rest of the queue for hours.
+#
+# pool_pre_ping=True issues a cheap SELECT 1 before handing out a
+# pooled connection; pool_recycle=300s recycles connections older
+# than 5 minutes proactively. SQLite has no pool so we skip both.
+_engine_kwargs: dict = {
+    "echo": False,
+    "connect_args": _connect_args,
+}
+if not _is_sqlite:
+    _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_recycle"] = 300
+
+engine = create_async_engine(settings.database_url, **_engine_kwargs)
 
 
 if _is_sqlite:
