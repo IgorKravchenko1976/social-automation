@@ -262,7 +262,10 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                     params={
                         "access_token": token,
                         "fields": "id,comments{id,from,text,timestamp}",
-                        "limit": 5,
+                        # We publish ~16 Pulse posts/day plus other content;
+                        # poll a wider window so comments under older posts
+                        # are still captured during the 7-day reply horizon.
+                        "limit": 30,
                     },
                     label="IG get_messages",
                 )
@@ -300,7 +303,19 @@ class InstagramPlatform(TokenPlatformMixin, BasePlatform):
                     label="IG send_reply",
                 )
                 if "error" in data:
-                    logger.error("Instagram reply error: %s", data["error"])
+                    err = data["error"]
+                    code = err.get("code")
+                    sub = err.get("error_subcode")
+                    # Permanent: comment/media deleted, or we lost permission to
+                    # reply to this object. Returning True marks the inbound
+                    # message as "replied" so it stops looping forever.
+                    if code in (33, 100) or sub in (33,):
+                        logger.warning(
+                            "Instagram reply skipped (permanent error %s/%s, msg=%s): %s",
+                            code, sub, platform_message_id, err.get("message"),
+                        )
+                        return True
+                    logger.error("Instagram reply error: %s", err)
                     return False
                 return True
         except Exception:
