@@ -657,10 +657,10 @@ async def _try_publish_post(
 
         await session.commit()
 
+        _thumb_url = None
         if any_published:
             try:
                 from content.blog_generator import generate_post_html, save_thumbnail, _parse_translations
-                _thumb_url = None
                 if post.image_path:
                     _thumb_url = save_thumbnail(post.id, post.image_path)
                 _pub_at = next(
@@ -680,6 +680,13 @@ async def _try_publish_post(
                 )
             except Exception:
                 logger.warning("Blog page generation failed for post_id=%d", post.id, exc_info=True)
+
+            # Send composed text / translations / photo / social URLs back
+            # to the source row in backend so app + web + blog all see them.
+            try:
+                await _writeback_post_to_source(post, list(publications), _thumb_url)
+            except Exception:
+                logger.warning("Writeback to source failed for post_id=%d", post.id, exc_info=True)
 
         await _cleanup_post_media(session, post)
 
@@ -843,4 +850,124 @@ async def _mark_city_event_on_backend(post: Post) -> None:
         logger.warning(
             "[city-pulse-publish] mark-posted failed for event %d: %s",
             city_event_id, exc,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Writeback: return composed text / translations / photo / social URLs to
+# the source row in the backend so research effort is preserved across the
+# product (app, web, blog).
+# ---------------------------------------------------------------------------
+
+def _strip_at(handle: str) -> str:
+    return (handle or "").lstrip("@").strip()
+
+
+def _build_social_url(platform_value: str, platform_post_id: str | None) -> str:
+    """Best-effort public URL for the bot's published item.
+
+    - Telegram: https://t.me/{channel}/{message_id}
+    - Facebook: https://facebook.com/{post_id}   (Graph API returns
+      "{pageId}_{postId}", which is a valid URL fragment)
+    - Instagram: skipped — Graph media id is not a public shortcode
+    """
+    if not platform_post_id:
+        return ""
+    if platform_value == Platform.TELEGRAM.value:
+        ch = _strip_at(settings.telegram_channel_id)
+        if not ch:
+            return ""
+        return f"https://t.me/{ch}/{platform_post_id}"
+    if platform_value == Platform.FACEBOOK.value:
+        return f"https://facebook.com/{platform_post_id}"
+    return ""
+
+
+def _writeback_target(post: Post) -> tuple[str, int] | None:
+    """Decide which backend table to writeback to and which row id to use."""
+    if post.source == "city_pulse" and post.poi_point_id:
+        return "city_pulse", int(post.poi_point_id)
+    if post.source == "poi" and post.backend_event_id:
+        return "event", int(post.backend_event_id)
+    return None
+
+
+def _build_extra_sources(post: Post) -> list[dict]:
+    """Pack post.source_url as an extra source on the row, if any."""
+    url = (post.source_url or "").strip()
+    if not url:
+        return []
+    name = ""
+    if post.source == "web_news" and post.place_name:
+        name = post.place_name[:120]
+    return [{"url": url, "name": name}]
+
+
+async def _writeback_post_to_source(
+    post: Post,
+    publications: list[Publication],
+    thumb_relative_url: str | None,
+) -> None:
+    """Send composed description / translations / photo / social URLs back
+    to the city_event or event row this post was built from. Best-effort —
+    failures are logged but never block the publish flow.
+    """
+    target = _writeback_target(post)
+    if not target:
+        return
+    target_kind, event_id = target
+
+    social_links: dict[str, str] = {}
+    for pub in publications:
+        if pub.status != PostStatus.PUBLISHED:
+            continue
+        url = _build_social_url(pub.platform, pub.platform_post_id)
+        if not url:
+            continue
+        # First-success-per-platform wins (avoid duplicate retries clobbering).
+        if pub.platform not in social_links:
+            social_links[pub.platform] = url
+
+    # Blog page is generated for every successful publish run.
+    if any(p.status == PostStatus.PUBLISHED for p in publications):
+        social_links["blog"] = f"https://www.im-in.net/blog/post-{post.id}.html"
+
+    # Absolute URL of the freshly saved thumbnail.
+    photo_url = ""
+    if thumb_relative_url:
+        photo_url = f"https://www.im-in.net/{thumb_relative_url.lstrip('/')}"
+
+    description = (post.content_raw or "").strip()
+    translations: dict[str, str] = {}
+    if post.translations:
+        try:
+            raw = json.loads(post.translations)
+            if isinstance(raw, dict):
+                for lang, val in raw.items():
+                    if isinstance(val, str):
+                        translations[lang] = val
+                    elif isinstance(val, dict):
+                        d = val.get("description") or val.get("content") or ""
+                        if isinstance(d, str) and d:
+                            translations[lang] = d
+        except Exception:
+            logger.debug("writeback: translations not JSON for post=%d", post.id)
+
+    extra_sources = _build_extra_sources(post)
+
+    try:
+        from geo_agent.backend_client import submit_post_published_writeback
+        await submit_post_published_writeback(
+            target=target_kind,
+            event_id=event_id,
+            description=description,
+            translations=translations,
+            photo_url=photo_url,
+            social_links=social_links,
+            extra_sources=extra_sources,
+        )
+    except Exception:
+        logger.warning(
+            "writeback failed for post=%d target=%s event=%d",
+            post.id, target_kind, event_id, exc_info=True,
         )
