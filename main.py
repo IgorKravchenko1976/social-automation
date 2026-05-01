@@ -179,7 +179,9 @@ def _setup_scheduler() -> None:
                           id="city_pulse_voice_queue", replace_existing=True)
 
         from geo_agent.city_pulse_enrich import process_city_pulse_enrich
-        scheduler.add_job(process_city_pulse_enrich, "interval", minutes=3,
+        # 90s cycle drains ~960 events/day — comfortably ahead of the
+        # ~480 pending backlog while staying inside Perplexity quotas.
+        scheduler.add_job(process_city_pulse_enrich, "interval", seconds=90,
                           id="city_pulse_enrich_queue", replace_existing=True)
         logger.info(
             "[city-pulse] Discover/verify/fetch/voice loops scheduled "
