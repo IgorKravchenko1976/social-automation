@@ -994,6 +994,27 @@ async def submit_source_verified(
         return resp.json()
 
 
+def _strip_nan(obj):
+    """Recursively replace NaN/Inf floats with None.
+
+    Python's json.loads accepts ``NaN``/``Infinity``/``-Infinity`` as
+    valid by default (parse_constant), but Go's encoding/json refuses
+    them and returns 400 on the entire batch — even when only a single
+    nested ``meta``/``facilities`` field is bad. Sanitise once before
+    sending.
+    """
+    import math
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _strip_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_strip_nan(x) for x in obj]
+    return obj
+
+
 async def submit_events_imported(
     job_id: int,
     source_id: int,
@@ -1009,17 +1030,18 @@ async def submit_events_imported(
       latitude, longitude, priceFrom, priceTo, currency, ticketUrl,
       thumbnailUrl, photos, ageLimit, spokenLanguage, meta.
 
-    Backend dedups by (sourceId, externalId).
+    Backend dedups by (sourceId, externalId) and now also collapses
+    cross-source duplicates via canonical_event_id (see migration 117).
     """
     if not is_configured():
         return {"error": "not configured"}
 
-    payload = {
+    payload = _strip_nan({
         "jobId": job_id,
         "sourceId": source_id,
         "events": events,
         "failed": failed,
-    }
+    })
     if error:
         payload["error"] = error
 
@@ -1029,6 +1051,18 @@ async def submit_events_imported(
             headers=_headers(),
             json=payload,
         )
+        if resp.status_code >= 400:
+            # Surface backend's actual reason (now includes JSON decode
+            # context after backend !224) before httpx swallows it as a
+            # bare HTTPStatusError.
+            try:
+                logger.warning(
+                    "[city-pulse] events-imported %d (job=%d source=%d events=%d): %s",
+                    resp.status_code, job_id, source_id, len(events),
+                    resp.text[:500],
+                )
+            except Exception:
+                pass
         resp.raise_for_status()
         return resp.json()
 

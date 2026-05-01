@@ -585,8 +585,8 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
             "title": title[:500],
             "description": (item.get("description") or "")[:5000],
             "category": cat,
-            "startsAt": item.get("startsAt"),
-            "endsAt": item.get("endsAt"),
+            "startsAt": _safe_iso_datetime(item.get("startsAt")),
+            "endsAt": _safe_iso_datetime(item.get("endsAt")),
             "durationMinutes": duration,
             "venueName": (item.get("venueName") or "")[:500],
             "venueNameUk": (item.get("venueNameUk") or "")[:500],
@@ -643,15 +643,53 @@ async def _attach_translations(events: list[dict], source_lang: str) -> list[dic
 
 def _safe_float(v: Any) -> float:
     try:
-        return float(v) if v is not None else 0.0
+        f = float(v) if v is not None else 0.0
     except (TypeError, ValueError):
         return 0.0
+    # Block NaN / +-Inf — Go's json.Decoder rejects them, so keeping
+    # them in the payload breaks the entire batch import.
+    if f != f or f in (float("inf"), float("-inf")):
+        return 0.0
+    return f
 
 
 def _safe_optional_float(v: Any) -> float | None:
     if v is None or v == "":
         return None
     try:
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return f
+
+
+def _safe_iso_datetime(v: Any) -> str | None:
+    """Coerce arbitrary GPT date output to RFC3339 or drop it.
+
+    Backend `*time.Time` JSON decoder requires strict RFC3339; anything
+    like "TBA", "2026-12-31 19:00:00" (no T), bare year, or recurring
+    placeholders breaks the whole batch import with a single 400. Drop
+    those silently — the event still imports without starts_at, and
+    NextCityEventForPost just skips it (filter `starts_at > now()`).
+    """
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if not s:
+        return None
+    # Python's fromisoformat accepts "+HH:MM" since 3.7 but not the "Z"
+    # suffix until 3.11. We're on 3.12 so both work, but be defensive.
+    candidate = s.replace("Z", "+00:00")
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(candidate)
+    except (TypeError, ValueError):
+        return None
+    # Re-emit in canonical RFC3339 so backend always sees the same shape.
+    if dt.tzinfo is None:
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
