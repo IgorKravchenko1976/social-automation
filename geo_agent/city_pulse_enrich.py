@@ -36,75 +36,61 @@ _lock = asyncio.Lock()
 
 _SUPPORTED_LANGS = ("uk", "en", "de", "fr", "es", "it", "el", "ru")
 
-_RESEARCH_PROMPT = (
-    "You are a cultural-events researcher. Use web search to find concrete, "
-    "verifiable details about ONE specific event. Focus on: programme / set "
-    "list, performers / cast, what is exhibited, theme, target audience, "
-    "languages spoken on stage, duration, dress code, age limit, transport "
-    "(metro / bus / parking), nearby landmarks. Use ONLY information that "
-    "appears in your search results — never invent dates, names, prices, or "
-    "venue facts. If the event itself has almost no online presence, focus "
-    "on the venue and the genre.\n\n"
-    "Return STRICT JSON with this shape (no commentary, no markdown):\n"
-    "{\n"
-    "  \"summary\": \"2-4 sentence overview in the source language ({lang}).\","
-    "\n  \"programme\": \"Full programme / set list / works performed / lots / "
-    "screenings (string, can be multi-line).\",\n"
-    "  \"artists\": [\"Performer or author names if known\"],\n"
-    "  \"audience\": \"Who is this for: families, students, opera fans, etc.\","
-    "\n  \"duration_minutes\": 120,\n"
-    "  \"transport\": \"Nearest metro / bus / parking, in the source language.\","
-    "\n  \"what_to_bring\": \"Dress code, ID, smart casual, comfortable shoes, etc.\","
-    "\n  \"age_limit\": null,\n"
-    "  \"facilities\": {\"parking\": true, \"wheelchair\": false, \"wifi\": false},"
-    "\n  \"thumbnail_url\": \"Full-resolution poster/photo URL if you can verify one\",\n"
-    "  \"sources\": [\"https://...\", \"https://...\"]\n"
-    "}\n\n"
-    "If a field has no verifiable info, use \"\" or null or [] — DO NOT invent.\n\n"
-    "Sources policy: never cite Russian or Belarusian domains (.ru, .by, "
-    "vk.com, ok.ru, yandex.*, mail.ru, ria.ru, tass, rt.com, sputnik, etc.). "
-    "If the event is in occupied Ukrainian territory or in Russia/Belarus, "
-    "return all fields empty."
-)
+_RESEARCH_PROMPT_TEMPLATE = """You are a cultural-events researcher. Use web search to find concrete, verifiable details about ONE specific event. Focus on: programme / set list, performers / cast, what is exhibited, theme, target audience, languages spoken on stage, duration, dress code, age limit, transport (metro / bus / parking), nearby landmarks. Use ONLY information that appears in your search results — never invent dates, names, prices, or venue facts. If the event itself has almost no online presence, focus on the venue and the genre.
+
+Return STRICT JSON with this shape (no commentary, no markdown):
+{
+  "summary": "2-4 sentence overview in the source language (__LANG__).",
+  "programme": "Full programme / set list / works performed / lots / screenings (string, can be multi-line).",
+  "artists": ["Performer or author names if known"],
+  "audience": "Who is this for: families, students, opera fans, etc.",
+  "duration_minutes": 120,
+  "transport": "Nearest metro / bus / parking, in the source language.",
+  "what_to_bring": "Dress code, ID, smart casual, comfortable shoes, etc.",
+  "age_limit": null,
+  "facilities": {"parking": true, "wheelchair": false, "wifi": false},
+  "thumbnail_url": "Full-resolution poster/photo URL if you can verify one",
+  "sources": ["https://...", "https://..."]
+}
+
+If a field has no verifiable info, use "" or null or [] — DO NOT invent.
+
+Sources policy: never cite Russian or Belarusian domains (.ru, .by, vk.com, ok.ru, yandex.*, mail.ru, ria.ru, tass, rt.com, sputnik, etc.). If the event is in occupied Ukrainian territory or in Russia/Belarus, return all fields empty."""
 
 
-_REWRITE_PROMPT = (
-    "You compose tight, factual cultural-event descriptions for a travel app.\n"
-    "Input: a JSON research blob with summary/programme/artists etc. about ONE event.\n"
-    "Output: STRICT JSON with this shape (no commentary, no markdown):\n"
-    "{\n"
-    "  \"description\": \"180-600 char description in {source_lang}\",\n"
-    "  \"translations\": {\n"
-    "    \"uk\": \"…\",\n"
-    "    \"en\": \"…\",\n"
-    "    \"de\": \"…\",\n"
-    "    \"fr\": \"…\",\n"
-    "    \"es\": \"…\",\n"
-    "    \"it\": \"…\",\n"
-    "    \"el\": \"…\",\n"
-    "    \"ru\": \"…\"\n"
-    "  },\n"
-    "  \"meta\": {\n"
-    "    \"programme\": \"…\",\n"
-    "    \"artists\": [\"…\"],\n"
-    "    \"audience\": \"…\",\n"
-    "    \"duration_minutes\": 0,\n"
-    "    \"sources\": [\"https://…\"]\n"
-    "  },\n"
-    "  \"facilities\": {\"parking\": true},\n"
-    "  \"transport_info\": \"…\",\n"
-    "  \"what_to_bring\": \"…\"\n"
-    "}\n\n"
-    "Rules:\n"
-    "- description MUST be 180-600 chars. If research is thin, describe the\n"
-    "  format (concert in two parts at venue X, organ recital, classical\n"
-    "  programme) and venue context — never copy the input stub like\n"
-    "  'Concert in two parts.' verbatim.\n"
-    "- Translations MUST cover ALL 8 languages: uk, en, de, fr, es, it, el, ru.\n"
-    "- Stay factual: only use facts present in the research blob.\n"
-    "- If a meta field is unknown, omit it (do not invent).\n"
-    "- Return ONLY JSON."
-)
+_REWRITE_PROMPT_TEMPLATE = """You compose tight, factual cultural-event descriptions for a travel app.
+Input: a JSON research blob with summary/programme/artists etc. about ONE event.
+Output: STRICT JSON with this shape (no commentary, no markdown):
+{
+  "description": "180-600 char description in __SOURCE_LANG__",
+  "translations": {
+    "uk": "…",
+    "en": "…",
+    "de": "…",
+    "fr": "…",
+    "es": "…",
+    "it": "…",
+    "el": "…",
+    "ru": "…"
+  },
+  "meta": {
+    "programme": "…",
+    "artists": ["…"],
+    "audience": "…",
+    "duration_minutes": 0,
+    "sources": ["https://…"]
+  },
+  "facilities": {"parking": true},
+  "transport_info": "…",
+  "what_to_bring": "…"
+}
+
+Rules:
+- description MUST be 180-600 chars. If research is thin, describe the format (concert in two parts at venue X, organ recital, classical programme) and venue context — never copy the input stub like 'Concert in two parts.' verbatim.
+- Translations MUST cover ALL 8 languages: uk, en, de, fr, es, it, el, ru.
+- Stay factual: only use facts present in the research blob.
+- If a meta field is unknown, omit it (do not invent).
+- Return ONLY JSON."""
 
 
 _DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
@@ -156,7 +142,7 @@ async def _perplexity_research(job: backend_client.CityPulseEnrichmentJob) -> di
             model="sonar",
             temperature=0.2,
             messages=[
-                {"role": "system", "content": _RESEARCH_PROMPT.format(lang=src_lang)},
+                {"role": "system", "content": _RESEARCH_PROMPT_TEMPLATE.replace("__LANG__", src_lang)},
                 {"role": "user", "content": user_prompt},
             ],
             timeout=60,
@@ -216,7 +202,7 @@ async def _gpt_compose(
             temperature=0.3,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": _REWRITE_PROMPT.format(source_lang=src_lang)},
+                {"role": "system", "content": _REWRITE_PROMPT_TEMPLATE.replace("__SOURCE_LANG__", src_lang)},
                 {"role": "user", "content": user_msg},
             ],
             timeout=60,
