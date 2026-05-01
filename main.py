@@ -183,6 +183,12 @@ def _setup_scheduler() -> None:
         # ~480 pending backlog while staying inside Perplexity quotas.
         scheduler.add_job(process_city_pulse_enrich, "interval", seconds=90,
                           id="city_pulse_enrich_queue", replace_existing=True)
+
+        from geo_agent.events_enrich import process_event_enrich
+        # Researcher events backlog is smaller (~50 short descriptions),
+        # 120s cycle = ~720/day, easily covers it inside an hour.
+        scheduler.add_job(process_event_enrich, "interval", seconds=120,
+                          id="events_enrich_queue", replace_existing=True)
         logger.info(
             "[city-pulse] Discover/verify/fetch/voice loops scheduled "
             "(discover=10m, verify=4m, fetch=6m, voice=3m)"
