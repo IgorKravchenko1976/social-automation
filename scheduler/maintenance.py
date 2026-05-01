@@ -107,8 +107,37 @@ async def expire_old_queued_publications() -> None:
             logger.info("Expired %d old queued publications from previous days", len(old_pubs))
 
 
+# Substrings in error_message that mark a permanent failure. We must NOT
+# requeue these — the retry would just hit the same wall (fact-check rejects
+# the same content, the post is intentionally marked stale, the platform
+# returned a permission/object-not-found error, etc.) and pin the publisher
+# in an infinite loop, blocking every other post in the queue.
+_PERMANENT_FAILURE_MARKERS = (
+    "fact-check rejected",
+    "fact_check rejected",
+    "fact-checked rejected",
+    "manual unblock",
+    "stale generic poi",
+    "permanent error",
+    "object with id",
+    "not active (no credentials)",
+)
+
+
+def _is_permanent_failure(error_message: str | None) -> bool:
+    if not error_message:
+        return False
+    msg = error_message.lower()
+    return any(marker in msg for marker in _PERMANENT_FAILURE_MARKERS)
+
+
 async def retry_failed_publications() -> None:
-    """Retry publications that failed but haven't exceeded max retries."""
+    """Retry publications that failed transiently (network/API hiccup).
+
+    Skips publications whose ``error_message`` indicates a permanent failure
+    (fact-check rejection, deleted platform object, etc.) — those would just
+    fail again and clog the publisher with the same item every hour.
+    """
     async with async_session() as session:
         result = await session.execute(
             select(Publication)
@@ -119,10 +148,21 @@ async def retry_failed_publications() -> None:
         )
         pubs = result.scalars().all()
 
+        retried = 0
+        skipped = 0
         for pub in pubs:
+            if _is_permanent_failure(pub.error_message):
+                skipped += 1
+                continue
             pub.status = PostStatus.QUEUED
             pub.error_message = None
+            retried += 1
 
         await session.commit()
-        if pubs:
-            logger.info("Reset %d failed publications for retry", len(pubs))
+        if retried:
+            logger.info("Reset %d failed publications for retry", retried)
+        if skipped:
+            logger.info(
+                "Kept %d publications FAILED (permanent reason — won't retry)",
+                skipped,
+            )
