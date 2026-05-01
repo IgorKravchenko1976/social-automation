@@ -599,7 +599,7 @@ async def _normalize_events(raw: str, src: backend_client.CityPulseSource) -> li
             "ticketUrl": ticket_raw,
             "thumbnailUrl": thumb_raw,
             "photos": photos,
-            "ageLimit": item.get("ageLimit"),
+            "ageLimit": _safe_age_limit(item.get("ageLimit")),
             "spokenLanguage": (item.get("spokenLanguage") or "")[:20],
             "facilities": facilities,
             "transportInfo": (item.get("transportInfo") or "")[:2000],
@@ -663,6 +663,42 @@ def _safe_optional_float(v: Any) -> float | None:
     if f != f or f in (float("inf"), float("-inf")):
         return None
     return f
+
+
+def _safe_age_limit(v: Any) -> int | None:
+    """Normalise ageLimit to a clean int.
+
+    GPT often returns "16+", "18+", "0", "all ages", etc. Backend has
+    `*int` so we extract the leading integer or drop the field. Empty
+    / unparseable → None (omitted from payload via httpx).
+    """
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if 0 <= v <= 99 else None
+    if isinstance(v, float):
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        i = int(v)
+        return i if 0 <= i <= 99 else None
+    if isinstance(v, str):
+        # Pull first integer run from the string.
+        digits = ""
+        for ch in v.strip():
+            if ch.isdigit():
+                digits += ch
+            elif digits:
+                break
+        if not digits:
+            return None
+        try:
+            i = int(digits)
+        except ValueError:
+            return None
+        return i if 0 <= i <= 99 else None
+    return None
 
 
 def _safe_iso_datetime(v: Any) -> str | None:
