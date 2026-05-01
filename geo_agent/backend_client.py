@@ -1108,6 +1108,116 @@ class CityPulseVoiceJob:
     starts_at: str | None
 
 
+@dataclass
+class CityPulseEnrichmentJob:
+    id: int
+    title: str
+    description: str
+    category: str
+    venue_name: str
+    venue_address: str
+    city: str
+    country_code: str
+    content_language: str
+    starts_at: str | None
+    ticket_url: str
+    source_homepage_url: str
+    source_name: str
+    thumbnail_url: str
+
+
+async def fetch_next_enrichment_job() -> CityPulseEnrichmentJob | None:
+    """GET /v1/api/city-pulse/next-event-to-enrich — pick one short event to enrich."""
+    if not is_configured():
+        return None
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{_base()}/v1/api/city-pulse/next-event-to-enrich",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if data.get("empty"):
+        return None
+    j = data.get("job") or {}
+    if not j.get("id"):
+        return None
+    return CityPulseEnrichmentJob(
+        id=j["id"],
+        title=j.get("title", ""),
+        description=j.get("description", ""),
+        category=j.get("category", ""),
+        venue_name=j.get("venueName", ""),
+        venue_address=j.get("venueAddress", ""),
+        city=j.get("city", ""),
+        country_code=j.get("countryCode", ""),
+        content_language=j.get("contentLanguage", ""),
+        starts_at=j.get("startsAt"),
+        ticket_url=j.get("ticketUrl", ""),
+        source_homepage_url=j.get("sourceHomepageUrl", ""),
+        source_name=j.get("sourceName", ""),
+        thumbnail_url=j.get("thumbnailUrl", ""),
+    )
+
+
+async def submit_enrichment(
+    event_id: int,
+    *,
+    description: str = "",
+    translations: dict | None = None,
+    meta: dict | None = None,
+    facilities: dict | None = None,
+    transport_info: str = "",
+    what_to_bring: str = "",
+    thumbnail_url: str = "",
+    failed: bool = False,
+    fail_reason: str = "",
+) -> bool:
+    """POST /v1/api/city-pulse/update-event-enrichment — write back result.
+
+    On failed=True the backend bumps attempts and either re-queues or marks
+    'failed' (after 3 attempts). On success it sets enrichment_status='enriched'.
+    """
+    if not is_configured():
+        return False
+
+    payload: dict = {"eventId": event_id}
+    if failed:
+        payload["failed"] = True
+        if fail_reason:
+            payload["failReason"] = fail_reason
+    else:
+        payload["description"] = description
+        if translations:
+            payload["translations"] = translations
+        if meta:
+            payload["meta"] = meta
+        if facilities:
+            payload["facilities"] = facilities
+        if transport_info:
+            payload["transportInfo"] = transport_info
+        if what_to_bring:
+            payload["whatToBring"] = what_to_bring
+        if thumbnail_url:
+            payload["thumbnailUrl"] = thumbnail_url
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base()}/v1/api/city-pulse/update-event-enrichment",
+            headers=_headers(),
+            json=payload,
+        )
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.warning(
+                "[city-pulse-enrich] update %d failed: %s %s",
+                event_id, resp.status_code, resp.text[:300],
+            )
+            return False
+    return True
+
+
 async def fetch_pending_voice_jobs(lang: str, limit: int = 5) -> list[CityPulseVoiceJob]:
     """GET /v1/api/city-pulse/pending-voice — events needing narration in `lang`.
 
