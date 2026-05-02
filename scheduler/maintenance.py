@@ -121,6 +121,17 @@ _PERMANENT_FAILURE_MARKERS = (
     "permanent error",
     "object with id",
     "not active (no credentials)",
+    # Instagram needs an image; if the source post has no real photo we
+    # disable Pexels/DALL-E fallback for poi/city_pulse — retrying just
+    # marks it FAILED again every cycle and burns slots on stale posts.
+    "no real photo",
+    "instagram requires image",
+    # Backend reported the source event was already published / archived /
+    # deduplicated. Re-trying the same post would just re-fail with the
+    # same answer.
+    "expired: not published on scheduled day",
+    "already_posted",
+    "duplicate event",
 )
 
 

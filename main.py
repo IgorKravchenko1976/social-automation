@@ -53,6 +53,12 @@ def _setup_scheduler() -> None:
                       id="auto_reply", replace_existing=True)
     scheduler.add_job(retry_failed_publications, "interval", hours=1,
                       id="retry_failed", replace_existing=True)
+    # Periodic cleanup of stale QUEUED pubs from previous days so the
+    # publisher doesn't endlessly burn slots on backlog from yesterday
+    # (root cause of the "no posts again" incident on 2026-05-02).
+    from scheduler.maintenance import expire_old_queued_publications
+    scheduler.add_job(expire_old_queued_publications, "interval", hours=6,
+                      id="expire_old_queued", replace_existing=True)
     scheduler.add_job(publish_missed_slots, "interval", minutes=15,
                       id="catchup_missed_slots", replace_existing=True)
     scheduler.add_job(run_health_check, "interval", minutes=30,
