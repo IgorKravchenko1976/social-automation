@@ -80,6 +80,46 @@ async def run_health_check() -> None:
     if published == 0 and past_slots > 0:
         problems.append(f"ZERO published posts but {past_slots} time slot(s) already passed")
 
+    # ── 2b. Stale QUEUED publications across ALL time (not just today) ──
+    # Detects the "publisher endlessly retries old QUEUED rows" failure
+    # mode (incident 2026-05-02). If pubs sit QUEUED for >24h without
+    # being expired, retry_failed_publications keeps reviving them and
+    # blocks fresh content. See publisher.CITY_PULSE_PUBLISH_MAX_AGE_HOURS.
+    async with async_session() as session:
+        stale_queued = (await session.execute(
+            select(sa_func.count(Publication.id))
+            .join(Post)
+            .where(
+                Publication.status == PostStatus.QUEUED,
+                Post.created_at < utcnow_naive() - timedelta(hours=24),
+            )
+        )).scalar() or 0
+    if stale_queued > 0:
+        logger.warning(
+            "[PUBS]  Stale QUEUED >24h: %d (these block fresh posts; see expire_old_queued)",
+            stale_queued,
+        )
+        problems.append(
+            f"{stale_queued} publications stuck QUEUED for >24h — publisher loop"
+        )
+
+    # ── 2c. Last successful publication timestamp ──
+    async with async_session() as session:
+        last_pub = (await session.execute(
+            select(sa_func.max(Publication.published_at))
+            .where(Publication.status == PostStatus.PUBLISHED)
+        )).scalar()
+    if last_pub:
+        hours_since = (utcnow_naive() - last_pub).total_seconds() / 3600
+        logger.info(
+            "[PUBS]  Last successful publish: %s (%.1fh ago)",
+            last_pub.strftime("%Y-%m-%d %H:%M UTC"), hours_since,
+        )
+        if hours_since > 4:
+            problems.append(
+                f"No successful publication for {hours_since:.1f}h — pipeline stalled"
+            )
+
     # ── 3. Missed time slots ────────────────────────────────────
     async with async_session() as session:
         today_posts = (await session.execute(

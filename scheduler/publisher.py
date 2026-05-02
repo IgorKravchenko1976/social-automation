@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select, func as sa_func
@@ -792,6 +792,11 @@ async def _publish_scheduled_post_inner(time_slot: int) -> None:
 _city_pulse_lock = asyncio.Lock()
 
 MAX_CITY_PULSE_PER_CYCLE = 3
+# Hard ceiling for how long a city_pulse post may sit in QUEUED before
+# we give up and mark it permanently FAILED. Without this guard, every
+# old QUEUED row gets recycled by retry_failed_publications and the
+# publisher endlessly burns its 3-slot budget on stale content.
+CITY_PULSE_PUBLISH_MAX_AGE_HOURS = 36
 
 
 async def publish_city_pulse_queue() -> int:
@@ -801,9 +806,48 @@ async def publish_city_pulse_queue() -> int:
     city_pulse posts and publishes them. After successful publication,
     marks the event on the backend via mark-city-event-posted.
 
+    Posts older than CITY_PULSE_PUBLISH_MAX_AGE_HOURS are expired in-place
+    instead of being retried — old QUEUED rows that keep flipping
+    QUEUED → FAILED → QUEUED (via retry_failed_publications) used to
+    burn 100 % of slots and block fresh posts (incident 2026-05-02).
+
     Returns the number of posts successfully published.
     """
     async with _city_pulse_lock:
+        # Step 1: hard-expire stale QUEUED city_pulse pubs (older than
+        # CITY_PULSE_PUBLISH_MAX_AGE_HOURS) with a permanent marker so
+        # retry_failed_publications won't requeue them. This prevents
+        # the "always 0/3 published" loop where a handful of old rows
+        # keep getting picked first via ORDER BY created_at ASC.
+        cutoff_hours = CITY_PULSE_PUBLISH_MAX_AGE_HOURS
+        async with async_session() as session:
+            stale = await session.execute(
+                select(Publication)
+                .join(Post, Post.id == Publication.post_id)
+                .where(
+                    Post.source == "city_pulse",
+                    Publication.status == PostStatus.QUEUED,
+                    Post.created_at < utcnow_naive() - timedelta(hours=cutoff_hours),
+                )
+            )
+            stale_rows = stale.scalars().all()
+            for pub in stale_rows:
+                pub.status = PostStatus.FAILED
+                pub.error_message = (
+                    f"permanent error: expired city_pulse publication "
+                    f"(>{cutoff_hours}h old, never published)"
+                )
+            if stale_rows:
+                await session.commit()
+                logger.warning(
+                    "[city-pulse-publish] expired %d stale QUEUED pubs (>%dh old)",
+                    len(stale_rows), cutoff_hours,
+                )
+
+        # Step 2: pick freshest queued posts (NEWEST FIRST so a few stuck
+        # old ones can never starve fresh content). Prefer posts where
+        # ALL pubs are still QUEUED — those are the brand-new ones from
+        # city_pulse_post_creator that actually have something to publish.
         async with async_session() as session:
             result = await session.execute(
                 select(Post)
@@ -811,9 +855,10 @@ async def publish_city_pulse_queue() -> int:
                 .where(
                     Post.source == "city_pulse",
                     Publication.status == PostStatus.QUEUED,
+                    Post.created_at >= utcnow_naive() - timedelta(hours=cutoff_hours),
                 )
                 .group_by(Post.id)
-                .order_by(Post.created_at)
+                .order_by(Post.created_at.desc())
                 .limit(MAX_CITY_PULSE_PER_CYCLE)
             )
             posts = result.scalars().all()
