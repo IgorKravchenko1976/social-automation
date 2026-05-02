@@ -55,7 +55,7 @@ def save_thumbnail(post_id: int, image_path: str) -> Optional[str]:
         thumb_name = f"thumb-{post_id}.jpg"
         thumb_path = _blog_dir() / thumb_name
         img.save(thumb_path, "JPEG", quality=THUMB_QUALITY, optimize=True)
-        logger.info("Saved thumbnail %s (%dx%d)", thumb_name, *THUMB_SIZE)
+        logger.info("Saved thumbnail %s (%dx%d)", thumb_name, *img.size)
         return f"blog/{thumb_name}"
     except Exception:
         logger.warning("Failed to create thumbnail for post %d", post_id, exc_info=True)
