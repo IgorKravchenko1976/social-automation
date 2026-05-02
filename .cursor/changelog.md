@@ -4,6 +4,62 @@ Reverse-chronological log of all agent work sessions. Each entry documents what 
 
 ---
 
+## 2026-05-02 — POI hand-off consumer (separate cadence + lock)
+
+**Branch**: main (MR !16) → bot (MR !17), pipeline 2494820712 success
+**Scope**: poi / publisher / scheduler
+
+### What was done
+- Added a POI consumer to the hand-off pipeline alongside the
+  existing city_pulse one. Uses a SEPARATE APScheduler job,
+  separate `asyncio.Lock`, separate client_id ('social-bot-poi')
+  so the two channels never block each other.
+- Cadence: every 60 min, batch=1. Backend anti-burst (-5 score
+  for same `point_type` in same city in last 6h) prevents flood.
+- Verified end-to-end: handoff #20 → POI 36123 (`Garden`, cafe,
+  Kyiv) published as post 452 in ~20s, backend stamped
+  `map_point_details.posted_to_social_at = 07:58:23 UTC`.
+
+### Files created
+- `scheduler/poi_handoff_publisher.py` — `publish_poi_via_handoff`
+  job (separate lock, batch=1, client_id='social-bot-poi').
+
+### Files modified
+- `scheduler/handoff_client.py` — `next_batch()` accepts
+  `kind='city_event'|'poi'|'*'`. New `fetch_poi_payload()` calls
+  `GET /v1/api/research/poi/{id}/for-post`.
+- `scheduler/post_creator.py` — public `prepare_local_post_for_poi`
+  helper (mirror of `prepare_local_post_for_event`). Single source
+  of truth for POI Post + Publication structure.
+- `scheduler/city_pulse_handoff_publisher.py` — dispatches
+  `source_kind='poi'` to the new `_process_poi_handoff` path.
+- `config/settings.py` — `USE_HANDOFF_API_POI` feature flag (default
+  true, independent from `USE_HANDOFF_API` for fine-grained
+  rollback).
+- `main.py` — register the new 60-min POI job behind both flags.
+
+### Coexistence with legacy POI publisher
+- Legacy `_create_poi_spotlight_post` (slot 2 + web_news fallbacks)
+  remains active. Both paths share
+  `map_point_details.posted_to_social_at` so each POI is posted at
+  most once across both channels.
+
+### AI-budget separation (per user request)
+- `poi_handoff_publisher.py` header explicitly notes: this code
+  ONLY orchestrates which already-prepared POI to publish next.
+  All description / translation / photo enrichment happened
+  upstream in `geo_agent/*` and `datacollector/*` pipelines that
+  have their own queues and shouldn't share rate-limit budget
+  with bursty publishing.
+
+### Rollback
+```
+echo 'USE_HANDOFF_API_POI=false' >> /opt/imin-bot/.env
+docker compose restart imin-bot
+```
+
+---
+
 ## 2026-05-02 — Region research: richer prompt for accurate, fresh, detailed descriptions
 
 **Branch**: main (PR #12 merged), pending push to bot
