@@ -64,6 +64,16 @@ def _setup_scheduler() -> None:
     scheduler.add_job(run_health_check, "interval", minutes=30,
                       id="health_check", replace_existing=True)
 
+    # Phase 5 of priority-ml-system (bot side): daily LightGBM
+    # score-back. 04:00 = quiet publishing window. predict() runs
+    # in-process on the CPU; the bottleneck is the PATCH back to the
+    # backend (chunked at 500 rows/request). Skips silently when the
+    # ml/ package isn't installed (cron logs "skipping").
+    from scheduler.ml_score_back import score_back_daily
+    scheduler.add_job(score_back_daily,
+                      CronTrigger(hour=4, minute=0, timezone=tz),
+                      id="ml_score_candidates_daily", replace_existing=True)
+
     from scheduler.blog_sync import sync_blog_to_vps
     scheduler.add_job(sync_blog_to_vps, CronTrigger(hour=21, minute=0, timezone=tz),
                       id="blog_sync_daily", replace_existing=True)

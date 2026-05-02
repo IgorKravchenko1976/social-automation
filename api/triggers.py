@@ -50,6 +50,14 @@ async def trigger_auto_reply():
     return {"status": "ok", "replied": count}
 
 
+@router.post("/trigger/ml-score-back")
+async def trigger_ml_score_back():
+    """Phase 5: run the daily ML score-back cron now."""
+    from scheduler.ml_score_back import score_back_daily
+    counters = await score_back_daily()
+    return {"status": "ok", **counters}
+
+
 @router.post("/trigger/renew-tokens")
 async def trigger_renew_tokens():
     try:

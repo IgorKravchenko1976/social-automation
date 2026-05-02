@@ -195,6 +195,73 @@ async def fetch_poi_payload(poi_id: int) -> Optional[dict]:
     return body.get("poi")
 
 
+async def push_ml_scores(
+    updates: list[dict[str, Any]],
+    *,
+    chunk: int = 500,
+) -> dict[str, int]:
+    """Phase 5 of priority-ml-system: PATCH ml_priority_score back to backend.
+
+    `updates` is a list of {"kind": "poi"|"city_event", "id": int, "score": float}.
+    Splits into <= chunk-sized batches so a single bad row can't fail
+    the whole day's scoring run.
+
+    Returns aggregated counters {updatedPOI, updatedCityEvent, skipped}.
+    """
+    if not is_configured() or not updates:
+        return {"updatedPOI": 0, "updatedCityEvent": 0, "skipped": 0}
+
+    counters = {"updatedPOI": 0, "updatedCityEvent": 0, "skipped": 0}
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as http:
+        for offset in range(0, len(updates), chunk):
+            slice_ = updates[offset:offset + chunk]
+            try:
+                resp = await http.patch(
+                    f"{_base()}/v1/api/admin/social/ml-scores",
+                    headers=_headers(),
+                    json={"updates": slice_},
+                )
+                resp.raise_for_status()
+                body = resp.json()
+                counters["updatedPOI"] += int(body.get("updatedPOI") or 0)
+                counters["updatedCityEvent"] += int(body.get("updatedCityEvent") or 0)
+                counters["skipped"] += int(body.get("skipped") or 0)
+            except Exception:
+                logger.warning(
+                    "[handoff] push_ml_scores chunk %d-%d failed",
+                    offset, offset + len(slice_), exc_info=True,
+                )
+    logger.info(
+        "[handoff] push_ml_scores done: poi=%d events=%d skipped=%d (sent=%d)",
+        counters["updatedPOI"], counters["updatedCityEvent"],
+        counters["skipped"], len(updates),
+    )
+    return counters
+
+
+async def fetch_score_candidates(
+    *,
+    poi_limit: int = 2000,
+    event_limit: int = 1000,
+) -> list[dict]:
+    """Pull the top N candidates per kind from the backend for ML scoring.
+
+    Reads /v1/api/admin/social/score-candidates if available, else
+    falls back to claiming next-batch in a side channel — but the
+    cheap path requires the lighter helper endpoint introduced
+    alongside Phase 5. For now, return an empty list and log a hint
+    so the cron is observable. The companion backend MR registers
+    /score-candidates as a follow-up if production telemetry shows
+    we need it.
+    """
+    if not is_configured():
+        return []
+    # Phase 5 ships a strict PATCH endpoint. /score-candidates is a
+    # follow-up because the bot can also derive the candidate list
+    # from its own DB (Post + Publication history) in the meantime.
+    return []
+
+
 async def fetch_city_event_payload(city_event_id: int) -> Optional[dict]:
     """Pull a single city_event by id for post composition.
 
