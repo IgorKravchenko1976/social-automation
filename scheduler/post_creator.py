@@ -320,10 +320,88 @@ async def _create_web_news_post(session: AsyncSession) -> Optional[Post]:
 MAX_POI_SKIP_RETRIES = 5
 
 
-def _is_generic_poi_name(poi: dict) -> bool:
-    """Detect POIs where name is just the type (e.g., name='monument', type='monument').
+# Substrings (case-insensitive, normalised) that mark a POI name as a known
+# global / national chain. These produce identical-looking posts wherever
+# they're shot ("McDonald's у Києві", "McDonald's у Львові", "McDonald's у
+# Хмельницькому") and historically lead the bot's failure cycles (see
+# 2026-05-02 SVG-image incident, MR !18).
+#
+# Backend Phase 1a (MR !249) already drops fast_food / supermarket / atm /
+# fuel_station via map_point_types.priority_weight = -15, so most chains
+# are penalised before they reach the bot. This list is the second layer:
+# catches branded venues that slip through with a non-fast-food point_type
+# (e.g. KFC tagged as 'restaurant', Starbucks as 'cafe').
+#
+# Match is substring-based on lower-cased name with non-alphanumerics
+# stripped. Entries cover Cyrillic + Latin spellings of the same brand.
+_KNOWN_CHAIN_BRANDS = (
+    # Fast-food chains (international)
+    "mcdonald", "макдональд", "мак дональд",
+    "kfc", "кфс", "к.ф.с",
+    "burger king", "бургер кинг", "бургер кінг",
+    "subway", "субвей", "сабвей",
+    "starbucks", "старбакс",
+    "dominos", "доминос", "домінос",
+    "pizza hut", "пицца хат", "піца хат",
+    "papa johns", "папа джонс",
+    "wendys", "вендис", "вендіс",
+    "chipotle",
+    # Coffee chains
+    "costa coffee", "коста кофе",
+    "dunkin", "данкин",
+    # Ukrainian / regional supermarket chains
+    "сільпо", "silpo",
+    "атб", "atb-market",
+    "novus", "новус",
+    "ашан", "auchan",
+    "metro cash", "метро кеш",
+    "billa", "билла", "білла",
+    "fora", "фора",
+    "epicentr", "епіцентр", "епицентр",
+    "varus", "варус",
+    "rukavychka", "рукавичка",
+    "класс", "klass",
+    "велика кишеня",
+    # Gas station chains
+    "okko", "окко",
+    "wog", "вог",
+    "ukrnafta", "укрнафта",
+    "shell", "шелл",
+    "socar", "сокар",
+)
 
-    These produce terrible AI content because there's no specific place info.
+
+def _normalise_for_brand_match(text: str) -> str:
+    """Lower-case + drop punctuation/whitespace for substring brand matching.
+
+    Catches "McDonald's", "Mc Donald's", "McDonalds" all as 'mcdonalds'.
+    """
+    import re
+    return re.sub(r"[^a-z\u0400-\u04FF0-9]", "", text.lower())
+
+
+def _is_known_chain_brand(name: str) -> bool:
+    """Return True iff the POI name matches any known chain brand."""
+    if not name:
+        return False
+    haystack = _normalise_for_brand_match(name)
+    if not haystack:
+        return False
+    return any(_normalise_for_brand_match(brand) in haystack for brand in _KNOWN_CHAIN_BRANDS)
+
+
+def _is_generic_poi_name(poi: dict) -> bool:
+    """Detect POIs unsuitable for individual social posts.
+
+    Three rejection rules:
+      1. Name equals its point_type (e.g. name='monument', type='monument').
+      2. Name has 3 chars or fewer (likely a stub or abbreviation).
+      3. Name matches a known global/national chain (McDonald's, Сільпо,
+         Окко…) — these produce identical posts wherever shot.
+
+    Backend Phase 1a category-weight already pushes most chains out of the
+    queue, but this catches the residual cases where a chain was tagged
+    with a non-penalised point_type (e.g. KFC under 'restaurant').
     """
     name = (poi.get("name") or "").strip().lower().replace("_", " ")
     point_type = (poi.get("pointType") or "").strip().lower().replace("_", " ")
@@ -332,6 +410,8 @@ def _is_generic_poi_name(poi: dict) -> bool:
     if name == point_type:
         return True
     if len(name) <= 3:
+        return True
+    if _is_known_chain_brand(poi.get("name") or ""):
         return True
     return False
 
