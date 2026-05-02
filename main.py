@@ -64,6 +64,14 @@ def _setup_scheduler() -> None:
     scheduler.add_job(run_health_check, "interval", minutes=30,
                       id="health_check", replace_existing=True)
 
+    # Phase 3 of priority-ml-system: per-post engagement snapshots at
+    # 1h / 24h / 7d / 30d after publish. The cron is idempotent (UNIQUE
+    # on (post_id, platform, window_hours)) so re-running it within a
+    # window only refreshes the row. Drives Phase 4 ML training labels.
+    from stats.post_engagement import collect_post_engagement
+    scheduler.add_job(collect_post_engagement, "interval", minutes=30,
+                      id="collect_post_engagement", replace_existing=True)
+
     from scheduler.blog_sync import sync_blog_to_vps
     scheduler.add_job(sync_blog_to_vps, CronTrigger(hour=21, minute=0, timezone=tz),
                       id="blog_sync_daily", replace_existing=True)

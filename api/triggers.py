@@ -43,6 +43,27 @@ async def trigger_poll():
     return {"status": "ok", "new_messages": len(messages)}
 
 
+@router.post("/trigger/collect-engagement")
+async def trigger_collect_engagement():
+    """Phase 3: run a single post_engagement collection cycle now."""
+    from stats.post_engagement import collect_post_engagement
+    written = await collect_post_engagement()
+    return {"status": "ok", "snapshots_written": written}
+
+
+@router.post("/admin/backfill-engagement")
+async def trigger_backfill_engagement(days: int = 7, platforms: str | None = None):
+    """Phase 3: one-shot backfill of post_engagement for the last N days.
+
+    `platforms` is a comma-separated allowlist (facebook,instagram,telegram).
+    Used after a fresh deploy or when the cron has been silent.
+    """
+    from stats.post_engagement import backfill_post_engagement
+    plats = [p.strip() for p in platforms.split(",")] if platforms else None
+    written = await backfill_post_engagement(days=days, platforms=plats)
+    return {"status": "ok", "snapshots_written": written, "days": days, "platforms": plats}
+
+
 @router.post("/trigger/auto-reply")
 async def trigger_auto_reply():
     from messaging.responder import respond_to_pending_messages

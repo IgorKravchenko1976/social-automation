@@ -6,7 +6,7 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, Boolean, Enum, Float, ForeignKey,
-    func,
+    UniqueConstraint, Index, func,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -174,6 +174,44 @@ class DailyStats(Base):
     likes = Column(Integer, default=0)              # positive + neutral reactions
     dislikes = Column(Integer, default=0)           # negative reactions
     collected_at = Column(DateTime, server_default=func.now())
+
+
+class PostEngagement(Base):
+    """Per-post per-platform engagement snapshot at a fixed window age.
+
+    Phase 3 of the priority-ml-system. Populated by the
+    `collect_post_engagement` cron in main.py: every 30 minutes it walks
+    PUBLISHED publications and, for each (1h | 24h | 7d | 30d) window
+    that has just elapsed since `published_at`, queries the platform
+    insights API (FB Graph, IG Insights, Telethon GetMessagesViewsRequest,
+    plus reaction_snapshots for TG reactions) and inserts/updates a row.
+
+    `score` is the normalised engagement metric the ML ranker (Phase 4)
+    learns to predict:
+        score = log10(views + 1) * 10 + likes*0.5 + comments*2 + shares*5
+
+    Unique on (post_id, platform, window_hours) so we always have at
+    most one snapshot per checkpoint and re-runs are idempotent.
+    """
+    __tablename__ = "post_engagement"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
+    platform = Column(String(20), nullable=False)         # facebook | instagram | telegram
+    window_hours = Column(Integer, nullable=False)        # 1 | 24 | 168 | 720
+    views = Column(Integer, default=0)
+    likes = Column(Integer, default=0)
+    comments = Column(Integer, default=0)
+    shares = Column(Integer, default=0)
+    score = Column(Float, default=0.0)                    # normalised engagement
+    collected_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("post_id", "platform", "window_hours",
+                         name="uq_post_engagement_checkpoint"),
+        Index("idx_post_engagement_post_platform", "post_id", "platform"),
+    )
 
 
 class GeoResearchTask(Base):
