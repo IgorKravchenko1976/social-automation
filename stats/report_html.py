@@ -252,8 +252,12 @@ def build_token_section(token_statuses: list) -> str:
 
 def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
                token_section: str = "", post_schedule_section: str = "",
-               website_section: str = "") -> str:
-    """Build full HTML email body."""
+               website_section: str = "", ml_section: str = "") -> str:
+    """Build full HTML email body.
+
+    `ml_section` is the Phase 6 A/B-tester snapshot. Optional — empty
+    string omits the section without breaking the layout.
+    """
     rows_html = ""
     for s in today_stats:
         label = PLATFORM_LABELS.get(s.platform, s.platform)
@@ -366,6 +370,7 @@ def build_html(today_stats: list[DailyStats], month_data: dict, date_str: str,
   {post_schedule_section}
   {website_section}
   {token_section}
+  {ml_section}
   <p style="color:#64748b;font-size:12px;margin-top:32px;text-align:center;">
     Автоматичний звіт від I'M IN Social Automation &bull; www.im-in.net
   </p>
@@ -406,6 +411,78 @@ def build_website_section(blog_status: dict) -> str:
         '<tr>'
         '<td style="padding:10px 14px;border-bottom:1px solid #262640;color:#94a3b8;">Деталі</td>'
         f'<td style="padding:10px 8px;border-bottom:1px solid #262640;">{detail}</td>'
+        '</tr>'
+        '</table>'
+    )
+
+
+def build_ml_section() -> str:
+    """Phase 6 dashboard: render the latest A/B decision snapshot.
+
+    Reads the persisted decision log so the section always reflects
+    the last evaluation cycle even if today's report runs before the
+    Saturday cron. Returns an empty string if the A/B tester hasn't
+    produced a decision yet (e.g. fresh deploy, no engagement data).
+    """
+    try:
+        from scheduler.ml_ab_tester import summarise_ab_state
+    except ImportError:
+        return ""
+    state = summarise_ab_state()
+    if state is None:
+        return ""
+
+    cur_v = state.active_version if state.active_version is not None else "—"
+    chal_v = state.challenger_version if state.challenger_version is not None else "—"
+    p_str = "n/a" if state.p_value is None else f"{state.p_value:.4f}"
+    lift = state.lift_pct or 0.0
+    if lift > 0:
+        lift_color = "#6ee7b7"
+        lift_sign = "+"
+    elif lift < 0:
+        lift_color = "#f87171"
+        lift_sign = ""
+    else:
+        lift_color = "#94a3b8"
+        lift_sign = ""
+
+    decision = (state.last_decision or "—")[:160]
+    decision_color = "#6ee7b7" if decision.startswith("promoted") else "#94a3b8"
+
+    return (
+        '<h2 style="color:#e2e8f0;font-size:17px;border-bottom:2px solid #8b5cf6;'
+        'padding-bottom:6px;margin-top:32px;">ML model performance</h2>'
+        '<table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:14px;">'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;width:200px;">Active model</td>'
+        f'<td style="padding:10px 8px;border-bottom:1px solid #262640;">v{cur_v}</td>'
+        '</tr>'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;">Challenger model</td>'
+        f'<td style="padding:10px 8px;border-bottom:1px solid #262640;">v{chal_v}</td>'
+        '</tr>'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;">Cohort sizes</td>'
+        f'<td style="padding:10px 8px;border-bottom:1px solid #262640;">'
+        f'current: <b>{state.current_cohort}</b> &bull; '
+        f'challenger: <b>{state.challenger_cohort}</b></td>'
+        '</tr>'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;">Mean engagement (7d)</td>'
+        f'<td style="padding:10px 8px;border-bottom:1px solid #262640;">'
+        f'current: <b>{state.current_mean:.1f}</b> &bull; '
+        f'challenger: <b>{state.challenger_mean:.1f}</b></td>'
+        '</tr>'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;">Lift / p-value</td>'
+        '<td style="padding:10px 8px;border-bottom:1px solid #262640;">'
+        f'<span style="color:{lift_color};font-weight:700;">{lift_sign}{lift:.1f}%</span>'
+        f' &bull; p={p_str}</td>'
+        '</tr>'
+        '<tr>'
+        '<td style="padding:10px 14px;border-bottom:1px solid #262640;">Last decision</td>'
+        f'<td style="padding:10px 8px;border-bottom:1px solid #262640;color:{decision_color};">'
+        f'{decision}</td>'
         '</tr>'
         '</table>'
     )

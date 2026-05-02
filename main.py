@@ -64,6 +64,15 @@ def _setup_scheduler() -> None:
     scheduler.add_job(run_health_check, "interval", minutes=30,
                       id="health_check", replace_existing=True)
 
+    # Phase 6 of priority-ml-system: A/B challenger evaluation +
+    # auto-promote. Saturday 03:30 — 30 minutes after the Phase 4
+    # weekly trainer at 03:00, so a freshly-trained challenger has
+    # 14 days to accumulate cohort data before the next eval.
+    from scheduler.ml_ab_tester import ab_evaluate_and_train
+    scheduler.add_job(ab_evaluate_and_train,
+                      CronTrigger(day_of_week="sat", hour=3, minute=30, timezone=tz),
+                      id="ml_ab_eval_weekly", replace_existing=True)
+
     from scheduler.blog_sync import sync_blog_to_vps
     scheduler.add_job(sync_blog_to_vps, CronTrigger(hour=21, minute=0, timezone=tz),
                       id="blog_sync_daily", replace_existing=True)

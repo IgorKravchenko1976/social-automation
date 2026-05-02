@@ -126,7 +126,7 @@ async def send_daily_report() -> None:
     from stats.report_html import (
         build_html, build_post_schedule_section,
         build_token_section, build_token_urgent_email,
-        build_website_section,
+        build_website_section, build_ml_section,
     )
 
     if not settings.resend_api_key or not settings.report_email_to:
@@ -151,8 +151,9 @@ async def send_daily_report() -> None:
     website_section = build_website_section(blog_status)
     logger.info("=== REPORT === Blog API: %s", "OK" if blog_status["ok"] else blog_status.get("error"))
 
+    ml_section = build_ml_section()
     html = build_html(today_stats, month_data, date_str, token_section, post_schedule_section,
-                      website_section)
+                      website_section, ml_section=ml_section)
 
     logger.info("=== REPORT === Sending via Resend API to %s ...", settings.report_email_to)
     try:

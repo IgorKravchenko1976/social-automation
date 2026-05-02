@@ -50,6 +50,22 @@ async def trigger_auto_reply():
     return {"status": "ok", "replied": count}
 
 
+@router.post("/trigger/ml-ab-evaluate")
+async def trigger_ml_ab_evaluate():
+    """Phase 6: run the A/B evaluation + auto-promote on demand."""
+    from scheduler.ml_ab_tester import ab_evaluate_and_train
+    state = await ab_evaluate_and_train()
+    return {"status": "ok", **state}
+
+
+@router.post("/trigger/ml-train-challenger")
+async def trigger_ml_train_challenger():
+    """Phase 6: train a fresh challenger model now."""
+    from scheduler.ml_ab_tester import train_challenger
+    version = await train_challenger()
+    return {"status": "ok", "challenger_version": version}
+
+
 @router.post("/trigger/renew-tokens")
 async def trigger_renew_tokens():
     try:
