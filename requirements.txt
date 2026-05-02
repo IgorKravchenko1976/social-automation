@@ -21,3 +21,12 @@ jinja2>=3.1.4
 matplotlib>=3.9.0
 paramiko>=3.5.0
 telethon>=1.37.0
+# ML stack — Phase 4 of priority-ml-system. lightgbm picked over xgboost
+# (smaller footprint, faster on CPU-only Docker), scikit-learn for the
+# train/test split + cross-validation only, joblib for model persistence.
+lightgbm>=4.3.0
+scikit-learn>=1.5.0
+joblib>=1.4.0
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.13.0

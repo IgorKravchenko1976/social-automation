@@ -64,6 +64,16 @@ def _setup_scheduler() -> None:
     scheduler.add_job(run_health_check, "interval", minutes=30,
                       id="health_check", replace_existing=True)
 
+    # Phase 4 of priority-ml-system: weekly LightGBM training on the
+    # post_engagement table (Phase 3). Saturday 03:00 because the
+    # publishing cycle is quiet then and a 1-3 minute training spike
+    # won't push slot publish jobs. Skips silently if there are <30
+    # mature samples or LightGBM isn't installed.
+    from ml import train_ranker_weekly
+    scheduler.add_job(train_ranker_weekly,
+                      CronTrigger(day_of_week="sat", hour=3, minute=0, timezone=tz),
+                      id="ml_train_weekly", replace_existing=True)
+
     from scheduler.blog_sync import sync_blog_to_vps
     scheduler.add_job(sync_blog_to_vps, CronTrigger(hour=21, minute=0, timezone=tz),
                       id="blog_sync_daily", replace_existing=True)

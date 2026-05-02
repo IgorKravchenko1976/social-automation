@@ -50,6 +50,39 @@ async def trigger_auto_reply():
     return {"status": "ok", "replied": count}
 
 
+@router.post("/trigger/ml-train")
+async def trigger_ml_train():
+    """Phase 4: train LightGBM ranker on the spot.
+
+    Returns model meta on success or `skipped` if there's not enough
+    mature engagement data yet (< 30 rows) or LightGBM isn't installed.
+    """
+    from ml import train_ranker_weekly
+    ranker = await train_ranker_weekly()
+    if ranker is None:
+        return {"status": "skipped",
+                "reason": "insufficient training data or missing dependency"}
+    from dataclasses import asdict
+    return {"status": "ok", "meta": asdict(ranker.meta)}
+
+
+@router.post("/ml/score-candidate")
+async def ml_score_candidate(candidate: dict):
+    """Phase 4 → Phase 5: predict an engagement score for one candidate.
+
+    The candidate dict matches the social-handoff API shape:
+      {kind: "poi"|"city_event", id, name, pointType?, category?, city,
+       countryCode, rating?, hasPhoto?, hasDesc?, ...}
+    Returns 0.0 if no trained model is loaded — caller (backend) should
+    treat that as "no signal" and fall back to the rule-based score.
+    """
+    from ml.feature_extractor import build_features_for_candidate
+    from ml import predict_scores
+    df = build_features_for_candidate(candidate)
+    scores = predict_scores(df)
+    return {"status": "ok", "score": scores[0] if scores else 0.0}
+
+
 @router.post("/trigger/renew-tokens")
 async def trigger_renew_tokens():
     try:
