@@ -387,9 +387,51 @@ async def research_region(
         content = response.choices[0].message.content
         result = json.loads(content)
 
+        # Hard guard: a continent can never be the right answer for the
+        # 'reject Russia/Belarus' rule. We've seen GPT incorrectly reject
+        # Europe because the uk-wiki search for "Europe" returns weird
+        # disambiguation context. The unit being researched is the entire
+        # continent — never reject it regardless of what GPT thinks.
         if result.get("_rejected"):
-            logger.info("[region-researcher] Rejected: %s (%s)", name, country_code)
-            return None
+            cc = (country_code or "").upper()
+            if level == "continent" or (
+                cc not in {"RU", "BY"}
+                and name.strip().lower() not in {
+                    "россия", "russia", "беларусь", "belarus",
+                    "rossiya", "russian federation",
+                }
+            ):
+                logger.warning(
+                    "[region-researcher] Ignoring false-positive reject for %s "
+                    "(level=%s, country=%s) — re-running with explicit override",
+                    name, level, country_code,
+                )
+                # Re-run with an explicit instruction not to reject this unit.
+                override_prompt = (
+                    REGION_RESEARCH_PROMPT
+                    + "\n\nВАЖЛИВО: ця конкретна одиниця НЕ Росія / НЕ Білорусь — "
+                    + "опиши її ЗВИЧАЙНО, не повертай _rejected."
+                )
+                response2 = await client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": override_prompt},
+                        {"role": "user", "content": context},
+                    ],
+                    temperature=0.5,
+                    max_tokens=2000,
+                )
+                result = json.loads(response2.choices[0].message.content)
+                if result.get("_rejected"):
+                    logger.info(
+                        "[region-researcher] Still rejected after override: %s — giving up",
+                        name,
+                    )
+                    return None
+            else:
+                logger.info("[region-researcher] Rejected: %s (%s)", name, country_code)
+                return None
 
         result["wikipediaUrl"] = wiki_url
         result["imageUrl"] = wiki_image
