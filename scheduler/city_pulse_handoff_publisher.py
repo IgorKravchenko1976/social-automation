@@ -47,8 +47,10 @@ import asyncio
 import logging
 from typing import Optional
 
+from sqlalchemy import select
+
 from db.database import async_session
-from db.models import Post
+from db.models import Post, Publication, PostStatus
 
 from scheduler import handoff_client
 from scheduler.city_pulse_post_creator import prepare_local_post_for_event
@@ -58,6 +60,100 @@ logger = logging.getLogger(__name__)
 _handoff_lock = asyncio.Lock()
 
 BATCH_SIZE = 3
+
+
+# Substrings (case-insensitive) in Publication.error_message that mark a
+# STRUCTURAL failure — same input next cycle gives the same output.
+# Reporting these as failed_transient triggers backend's auto-retry policy
+# and wastes 2 more handoff slots before auto-promote-to-permanent kicks
+# in (incident 2026-05-02: McDonald's POI cycled 2× hourly because all
+# fails looked transient).
+#
+# Anything NOT matched here is treated as transient: network blip, API
+# timeout, expired token, daily platform cap (will recover next day).
+_STRUCTURAL_FAILURE_MARKERS = (
+    # Bot-side rejections
+    "fact-check rejected",
+    "fact_check rejected",
+    "fact-checked rejected",
+    "stale generic poi",
+    "instagram requires image",
+    "no real photo",
+    "tiktok requires video",
+    # Platform-side image-format rejections (Wikidata SVG-as-jpg, 1×1
+    # placeholder, broken-header JPEG, etc.). The same image_path will
+    # fail again next cycle.
+    "image_process_failed",
+    "could not get public url for image",
+    "invalid parameter",
+    # Platform reports the post itself is illegal / banned. Won't
+    # change with another retry.
+    "permanent error",
+    "object with id",
+    "duplicate event",
+    "already_posted",
+)
+
+
+def _is_structural_error(error_message: str | None) -> bool:
+    if not error_message:
+        return False
+    msg = error_message.lower()
+    return any(marker in msg for marker in _STRUCTURAL_FAILURE_MARKERS)
+
+
+async def _classify_publication_failure(post_id: int) -> tuple[str, str]:
+    """Inspect Publications for the post and decide handoff result.
+
+    Called only when _try_publish_post returned success=False (i.e. no
+    platform succeeded). Returns ("failed_permanent" | "failed_transient",
+    human reason). Treats the failure as permanent only when EVERY non-
+    PUBLISHED publication has a structural error_message — one network /
+    timeout / token failure is enough to keep the row eligible for retry.
+
+    Why we read DB instead of getting publications passed in: _try_publish_post
+    already commits per-pub status changes; reading fresh rows is the
+    simplest race-free way to see the final per-platform verdict.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(Publication).where(Publication.post_id == post_id)
+        )
+        pubs = result.scalars().all()
+
+    if not pubs:
+        return "failed_transient", f"no publications found for post {post_id}"
+
+    # Anything still QUEUED or PUBLISHING means the publish loop never
+    # reached a verdict for this platform (deferred for spacing, exception
+    # before assigning status, etc.). Safer to retry.
+    for p in pubs:
+        if p.status in (PostStatus.QUEUED, PostStatus.PUBLISHING):
+            return (
+                "failed_transient",
+                f"post {post_id}: {p.platform} still {p.status.value}",
+            )
+
+    failed_pubs = [p for p in pubs if p.status == PostStatus.FAILED]
+    transient_pubs = [
+        p for p in failed_pubs if not _is_structural_error(p.error_message)
+    ]
+    if transient_pubs:
+        sample = transient_pubs[0]
+        return (
+            "failed_transient",
+            (
+                f"post {post_id}: {sample.platform} transient "
+                f"({(sample.error_message or '?')[:120]})"
+            ),
+        )
+
+    sample = failed_pubs[0] if failed_pubs else None
+    sample_msg = (sample.error_message or "?")[:120] if sample else "no failed pubs"
+    return (
+        "failed_permanent",
+        f"post {post_id}: all platforms structural ({sample_msg})",
+    )
 
 
 async def publish_via_handoff() -> int:
@@ -218,12 +314,12 @@ async def _process_handoff_item(item: handoff_client.HandoffItem) -> bool:
         )
         return True
 
-    # Publication failed across all platforms after fact-check etc.
-    await _safe_report(
-        item.handoff_id,
-        result="failed_transient",
-        reason=f"all platforms failed for post {post_id}",
-    )
+    # Publication failed across all platforms. Classify so the backend
+    # doesn't waste 2 more handoff cycles re-issuing the same row when
+    # the failure is structural (image format, fact-check, etc.) and
+    # cannot improve next attempt. See _classify_publication_failure.
+    final_result, reason = await _classify_publication_failure(post_id)
+    await _safe_report(item.handoff_id, result=final_result, reason=reason)
     return False
 
 
@@ -317,11 +413,8 @@ async def _process_poi_handoff(item: handoff_client.HandoffItem) -> bool:
         )
         return True
 
-    await _safe_report(
-        item.handoff_id,
-        result="failed_transient",
-        reason=f"all platforms failed for post {post_id}",
-    )
+    final_result, reason = await _classify_publication_failure(post_id)
+    await _safe_report(item.handoff_id, result=final_result, reason=reason)
     return False
 
 

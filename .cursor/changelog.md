@@ -54,6 +54,15 @@ Reverse-chronological log of all agent work sessions. Each entry documents what 
 2. Restart the bot container so the new column is added by `_run_migrations` and the new code is loaded.
 3. Trigger `publish_missed_slots()` to backfill today's regular slots that were skipped.
 
+### Follow-up: classify handoff failures (don't blanket-report failed_transient)
+
+`scheduler/city_pulse_handoff_publisher.py` previously reported `failed_transient` for every failed publication. The backend then auto-retried the same row up to `SocialMaxAttempts=3` times (~3 hours of useless cycles) before promoting to permanent. New `_classify_publication_failure()` reads each Publication's status + error_message and:
+
+- Returns `failed_transient` if any pub is still QUEUED/PUBLISHING (publish loop didn't reach a verdict) or any FAILED pub has a network/timeout/token/daily-cap reason.
+- Returns `failed_permanent` only when EVERY non-published pub failed with a structural reason matched by `_STRUCTURAL_FAILURE_MARKERS` (image_process_failed, invalid parameter, could not get public url for image, fact-check rejected, instagram requires image, no real photo, etc.).
+
+Result: a POI whose only image is broken / fact-check-fails / etc. is now permanently dropped on the FIRST failed cycle instead of cycling 3 times. Network glitches still get retried. Backend's auto-promote-after-3 stays as a safety net.
+
 ---
 
 ## 2026-05-02 — POI hand-off consumer (separate cadence + lock)
