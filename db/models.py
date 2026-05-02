@@ -52,6 +52,11 @@ class Post(Base):
     place_name = Column(String(500), nullable=True)
     poi_point_id = Column(Integer, nullable=True)  # map_points.id from backend DB
     backend_event_id = Column(Integer, nullable=True)  # events.entity_id from backend DB (for deep links)
+    # backend social_post_handoff.id if this Post was created from a hand-off
+    # batch (POI or City Pulse). NULL = regular scheduled slot. Used by
+    # count_published_today() so handoff bursts don't block the 5
+    # daily slots from running. Added 2026-05-02.
+    handoff_id = Column(Integer, nullable=True)
     source_published_at = Column(DateTime, nullable=True)  # date the original source published the article
     translations = Column(Text, nullable=True)  # JSON: {"en": {"title":"...","content":"..."}, ...}
     pipeline_log = Column(Text, nullable=True)  # JSON array of pipeline stage entries
