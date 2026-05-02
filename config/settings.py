@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     # if the new pipeline misbehaves.
     use_handoff_api: bool = True
 
+    # Use the social hand-off API for POI (map_points) too. This adds
+    # at most 1 POI post per hour on top of the legacy slot system,
+    # with backend-side anti-burst protection (same point_type in
+    # same city is penalised). Default true. Set to false to keep
+    # POI publishing strictly on the legacy slot path while you
+    # observe the new pipeline. Independent from use_handoff_api so
+    # one channel can be flipped off without the other.
+    use_handoff_api_poi: bool = True
+
     # Web search AI for POI research (fallback chain: Perplexity -> Tavily -> Brave)
     perplexity_api_key: str = ""
     tavily_api_key: str = ""

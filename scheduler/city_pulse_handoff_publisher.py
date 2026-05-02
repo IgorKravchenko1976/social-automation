@@ -104,9 +104,11 @@ async def publish_via_handoff() -> int:
 
 async def _process_handoff_item(item: handoff_client.HandoffItem) -> bool:
     """Handle ONE hand-off claim end-to-end. Returns True iff published."""
+    if item.source_kind == "poi":
+        return await _process_poi_handoff(item)
     if item.source_kind != "city_event":
-        # POI / event hand-off arrives in a future MR. For now leave
-        # the lease to expire naturally — backend will recycle.
+        # Unknown kinds (future expansion). Leave the lease to expire
+        # naturally — backend will recycle after SocialLeaseDuration.
         await _safe_report(
             item.handoff_id,
             result="skipped",
@@ -217,6 +219,104 @@ async def _process_handoff_item(item: handoff_client.HandoffItem) -> bool:
         return True
 
     # Publication failed across all platforms after fact-check etc.
+    await _safe_report(
+        item.handoff_id,
+        result="failed_transient",
+        reason=f"all platforms failed for post {post_id}",
+    )
+    return False
+
+
+async def _process_poi_handoff(item: handoff_client.HandoffItem) -> bool:
+    """Hand-off path for source_kind='poi'. Mirrors the city_event path:
+    fetch payload → quality gate → reuse existing publisher pipeline →
+    close lease.
+    """
+    try:
+        poi = await handoff_client.fetch_poi_payload(item.source_id)
+    except Exception as exc:
+        logger.warning(
+            "[poi-handoff] fetch payload for poi=%d failed: %s",
+            item.source_id, exc,
+        )
+        await _safe_report(
+            item.handoff_id,
+            result="failed_transient",
+            reason=f"payload fetch: {str(exc)[:160]}",
+        )
+        return False
+
+    if not poi:
+        logger.info(
+            "[poi-handoff] poi %d returned 404, marking permanent",
+            item.source_id,
+        )
+        await _safe_report(
+            item.handoff_id,
+            result="failed_permanent",
+            reason="poi 404 (deleted/inactive)",
+        )
+        return False
+
+    from scheduler.post_creator import prepare_local_post_for_poi
+
+    post_id, reject_reason = await prepare_local_post_for_poi(poi)
+    if reject_reason:
+        # Quality gate failures (generic_name, no_description_no_wiki,
+        # low_rating) are structural — same POI today and tomorrow has
+        # the same data. Mark permanent so it stops cycling.
+        logger.info(
+            "[poi-handoff] poi=%d rejected: %s",
+            item.source_id, reject_reason,
+        )
+        await _safe_report(
+            item.handoff_id,
+            result="failed_permanent",
+            reason=f"quality_gate:{reject_reason}",
+        )
+        return False
+    if post_id is None:
+        await _safe_report(
+            item.handoff_id,
+            result="failed_transient",
+            reason="post creation failed (no id)",
+        )
+        return False
+
+    from scheduler.publisher import _try_publish_post
+
+    async with async_session() as session:
+        post = await session.get(Post, post_id)
+        if post is None:
+            await _safe_report(
+                item.handoff_id,
+                result="failed_transient",
+                reason=f"post {post_id} vanished after creation",
+            )
+            return False
+
+    try:
+        success = await _try_publish_post(post, time_slot=99, content_type="poi")
+    except Exception as exc:
+        logger.exception(
+            "[poi-handoff] publish post=%d threw: %s", post_id, exc,
+        )
+        await _safe_report(
+            item.handoff_id,
+            result="failed_transient",
+            reason=f"publish exception: {str(exc)[:160]}",
+        )
+        return False
+
+    if success:
+        await _safe_report(
+            item.handoff_id,
+            result="published",
+            social_post_id=post_id,
+            reason="ok",
+        )
+        return True
+
     await _safe_report(
         item.handoff_id,
         result="failed_transient",
