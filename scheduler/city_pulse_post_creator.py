@@ -302,6 +302,108 @@ def _format_city_event_for_post(event: dict) -> tuple[str, str]:
     return title[:200], content
 
 
+# ── Reusable Post-creation helper ─────────────────────────────
+#
+# Used by BOTH the legacy 5-min creator (process_city_pulse_post) and
+# the new hand-off-driven publisher (city_pulse_handoff_publisher.py)
+# so the local Post + Publications structure stays consistent across
+# both code paths during the rollout.
+
+async def prepare_local_post_for_event(event: dict) -> tuple[Optional[int], str]:
+    """Run quality gates → download thumbnail → create Post + Publications.
+
+    Returns (post_id, ""). On any reject returns (None, reason). The
+    `reason` string is suitable for sending back to the backend as
+    handoff /report-result.reason or to the legacy mark-posted error.
+
+    NOTE: This helper performs side effects (DB INSERT, image download)
+    only when the event passes all gates, so failures are cheap.
+    """
+    city_event_id = event.get("id")
+    if not city_event_id:
+        return None, "missing_id"
+
+    if await _already_queued(city_event_id):
+        return None, "already_queued_locally"
+
+    reject = _quality_gate(event, city_event_id)
+    if reject:
+        return None, reject
+
+    image_path: Optional[str] = None
+    thumb_url = (event.get("thumbnailUrl") or "").strip()
+    if thumb_url and thumb_url.startswith("http"):
+        try:
+            from content.media import download_image_from_url
+            image_path = await download_image_from_url(thumb_url)
+        except Exception as exc:
+            logger.warning(
+                "[city-pulse-post] thumbnail download failed for event %d: %s",
+                city_event_id, exc,
+            )
+
+    if not image_path:
+        return None, "no_photo"
+
+    title, content = _format_city_event_for_post(event)
+
+    try:
+        async with async_session() as session:
+            lat = event.get("latitude")
+            lon = event.get("longitude")
+            if not _is_precise_location(lat, lon):
+                lat = None
+                lon = None
+
+            post = Post(
+                title=title,
+                content_raw=content,
+                source="city_pulse",
+                source_url=event.get("sourceHomepageUrl") or "",
+                ticket_url=event.get("ticketUrl") or "",
+                image_path=image_path,
+                latitude=lat,
+                longitude=lon,
+                place_name=(event.get("venueName") or "")[:500],
+                poi_point_id=city_event_id,
+            )
+            post.log_pipeline(
+                "topic", "ok",
+                f"city event #{city_event_id}: {title[:80]} ({event.get('city', '')})",
+            )
+
+            session.add(post)
+            await session.flush()
+
+            for platform in CITY_PULSE_PLATFORMS:
+                session.add(Publication(post_id=post.id, platform=platform.value))
+
+            translations = event.get("translations") or {}
+            if isinstance(translations, str):
+                try:
+                    translations = _json.loads(translations)
+                except Exception:
+                    translations = {}
+            if translations:
+                post.translations = _json.dumps(translations, ensure_ascii=False)
+
+            await session.commit()
+            post_id = post.id
+
+        logger.info(
+            "[city-pulse-post] event %d → post %d (title=%s)",
+            city_event_id, post_id, title[:60],
+        )
+        return post_id, ""
+
+    except Exception as exc:
+        logger.exception(
+            "[city-pulse-post] failed to create post for event %d: %s",
+            city_event_id, exc,
+        )
+        return None, f"db_error:{str(exc)[:120]}"
+
+
 # ── Main entry point ──────────────────────────────────────────
 
 async def process_city_pulse_post() -> bool:
