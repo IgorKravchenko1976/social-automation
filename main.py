@@ -270,24 +270,46 @@ def _setup_scheduler() -> None:
         )
         logger.info("[city-pulse] Weekly auto-discover scan every Tuesday at 05:00")
 
-        # ── City Pulse social post pipeline (April 2026) ──
-        # Every 5 minutes: pull one event from imin-backend (any city),
-        # queue Post + Publications. Existing publisher.py picks them up on
-        # its loop and dispatches to Telegram, Facebook, Instagram.
-        from scheduler.city_pulse_post_creator import process_city_pulse_post
-        from scheduler.publisher import publish_city_pulse_queue
+        # ── City Pulse social post pipeline ──
+        #
+        # Two paths gated by settings.use_handoff_api:
+        #   true  (default, since 2026-05-02): backend hand-off API
+        #     drives everything. ONE job every 15 min that fetches
+        #     a 3-event batch, creates Posts, publishes, and reports
+        #     each result back. Backend owns the queue, dedup, lease
+        #     expiry and retry policy → no more "no posts again"
+        #     incidents from a stuck local QUEUED row.
+        #   false: legacy two-job path (5-min creator + 15-min
+        #     publisher) for emergency rollback.
+        if getattr(settings, "use_handoff_api", True):
+            from scheduler.city_pulse_handoff_publisher import publish_via_handoff
+            scheduler.add_job(
+                publish_via_handoff,
+                "interval", minutes=15,
+                id="city_pulse_handoff_publisher", replace_existing=True,
+            )
+            logger.info(
+                "[city-pulse] Hand-off publisher every 15 min "
+                "(backend-driven queue, batch=3)"
+            )
+        else:
+            from scheduler.city_pulse_post_creator import process_city_pulse_post
+            from scheduler.publisher import publish_city_pulse_queue
 
-        scheduler.add_job(
-            process_city_pulse_post,
-            "interval", minutes=5,
-            id="city_pulse_post_creator", replace_existing=True,
-        )
-        scheduler.add_job(
-            publish_city_pulse_queue,
-            "interval", minutes=15,
-            id="city_pulse_publisher", replace_existing=True,
-        )
-        logger.info("[city-pulse] Post creator every 5 min + publisher every 15 min (all cities)")
+            scheduler.add_job(
+                process_city_pulse_post,
+                "interval", minutes=5,
+                id="city_pulse_post_creator", replace_existing=True,
+            )
+            scheduler.add_job(
+                publish_city_pulse_queue,
+                "interval", minutes=15,
+                id="city_pulse_publisher", replace_existing=True,
+            )
+            logger.info(
+                "[city-pulse] LEGACY pipeline: creator every 5 min + "
+                "publisher every 15 min (set USE_HANDOFF_API=true to switch)"
+            )
 
     logger.info("Scheduler configured: %d jobs, tz=%s", len(scheduler.get_jobs()), tz)
 
