@@ -336,6 +336,119 @@ def _is_generic_poi_name(poi: dict) -> bool:
     return False
 
 
+async def prepare_local_post_for_poi(poi: dict) -> tuple[Optional[int], str]:
+    """Run quality gates → create Post + Publications for one POI payload.
+
+    Sibling of city_pulse_post_creator.prepare_local_post_for_event but
+    for the POI hand-off pipeline (added 2026-05-02 alongside the
+    backend social hand-off API). Used by
+    scheduler.city_pulse_handoff_publisher when source_kind='poi'.
+
+    Returns (post_id, "") on success, (None, reason) on a quality-gate
+    skip or db error. The reason string is suitable for sending back to
+    the backend as /report-result.reason.
+
+    Differences from _create_poi_spotlight_post:
+      - No retry loop here (the hand-off API already handed us a single
+        candidate that the backend already filtered for completeness).
+      - No mark_poi_posted call: the backend's /report-result handler
+        does the posted_to_social_at writeback on 'published' so we
+        avoid a double-stamp race.
+      - Caller (handoff publisher) decides what to do with the
+        rejection reason; this helper never marks anything posted.
+    """
+    point_id = poi.get("id")
+    if not point_id:
+        return None, "missing_id"
+
+    if _is_generic_poi_name(poi):
+        return None, f"generic_name:{poi.get('name','')[:40]}"
+
+    has_description = bool((poi.get("description") or "").strip())
+    has_wikipedia = bool((poi.get("wikipediaUrl") or "").strip())
+    if not has_description and not has_wikipedia:
+        return None, "no_description_no_wiki"
+
+    poi_rating = poi.get("rating", 0) or 0
+    if poi_rating > 0 and poi_rating < 3.0:
+        return None, f"low_rating:{poi_rating}"
+
+    poi_text = format_poi_for_ai(poi)
+    title = f"{poi.get('name', '')} — {poi.get('city', '')}".strip(" —")
+
+    poi_image_url = poi.get("imageUrl") or ""
+    image_path: Optional[str] = None
+    if not poi_image_url:
+        try:
+            from geo_agent.backend_client import try_enrich_photo
+            google_url = await try_enrich_photo(point_id)
+            if google_url:
+                poi_image_url = google_url
+        except Exception as exc:
+            logger.warning("[poi-handoff] photo enrich failed for %d: %s", point_id, exc)
+    if poi_image_url:
+        try:
+            from content.media import download_image_from_url
+            downloaded = await download_image_from_url(poi_image_url)
+            if downloaded:
+                image_path = downloaded
+        except Exception as exc:
+            logger.warning("[poi-handoff] photo download failed for %d: %s", point_id, exc)
+
+    try:
+        async with async_session() as session:
+            post = Post(
+                title=title[:200],
+                content_raw=poi_text,
+                source="poi",
+                source_url=poi.get("wikipediaUrl") or poi.get("website") or "",
+                latitude=poi.get("latitude"),
+                longitude=poi.get("longitude"),
+                place_name=poi.get("name", "")[:500],
+                poi_point_id=point_id,
+                image_path=image_path,
+            )
+            post.log_pipeline("topic", "ok",
+                              f"POI #{point_id}: {poi.get('name','')[:80]} ({poi.get('city','')})")
+
+            session.add(post)
+            await session.flush()
+
+            for platform in ALL_PLATFORMS:
+                session.add(Publication(post_id=post.id, platform=platform.value))
+
+            try:
+                tr = await translate_post(title, poi_text[:1000])
+                if tr:
+                    post.translations = _json.dumps(tr, ensure_ascii=False)
+            except Exception as exc:
+                logger.warning("[poi-handoff] translation failed for %d: %s", point_id, exc)
+
+            try:
+                from content.poi_client import ensure_event_for_point
+                backend_eid = await ensure_event_for_point(point_id)
+                if backend_eid:
+                    post.backend_event_id = backend_eid
+            except Exception as exc:
+                logger.warning("[poi-handoff] ensure_event_for_point failed for %d: %s", point_id, exc)
+
+            await session.commit()
+            post_id = post.id
+
+        logger.info(
+            "[poi-handoff] poi %d → post %d (title=%s)",
+            point_id, post_id, title[:60],
+        )
+        return post_id, ""
+
+    except Exception as exc:
+        logger.exception(
+            "[poi-handoff] failed to create post for poi %d: %s",
+            point_id, exc,
+        )
+        return None, f"db_error:{str(exc)[:120]}"
+
+
 async def _create_poi_spotlight_post(session: AsyncSession) -> Optional[Post]:
     """Create a post from the richest available POI in our database.
 

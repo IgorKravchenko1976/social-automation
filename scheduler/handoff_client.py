@@ -67,7 +67,11 @@ def _base() -> str:
     return settings.imin_backend_api_base.rstrip("/")
 
 
-async def next_batch(n: int = DEFAULT_BATCH, client_id: str = "social-bot") -> list[HandoffItem]:
+async def next_batch(
+    n: int = DEFAULT_BATCH,
+    client_id: str = "social-bot",
+    kind: str = "city_event",
+) -> list[HandoffItem]:
     """Claim up to N candidates from the backend queue.
 
     Each returned item carries an opaque `handoff_id` that the caller
@@ -76,14 +80,23 @@ async def next_batch(n: int = DEFAULT_BATCH, client_id: str = "social-bot") -> l
     the row will re-enter the pool — but every "lost" lease counts
     against the row's attempt budget so a chronic crashing path will
     eventually be auto-promoted to failed_permanent.
+
+    `kind` filters the queue to one source type:
+      'city_event' (default) — cultural events from City Pulse.
+      'poi'                  — enriched map_points.
+      '*'                    — any kind, sorted by global priority.
+    `client_id` MUST be unique per worker so concurrent claims don't
+    fight over the same row (e.g. social-bot vs social-bot-poi).
     """
     if not is_configured():
         return []
+    if kind not in ("city_event", "poi", "*"):
+        raise ValueError(f"unknown kind {kind!r}")
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as http:
         resp = await http.get(
             f"{_base()}/v1/api/social/next-batch",
             headers=_headers(),
-            params={"n": n, "client": client_id},
+            params={"n": n, "client": client_id, "kind": kind},
         )
         resp.raise_for_status()
         body = resp.json()
@@ -155,6 +168,31 @@ async def report_result(
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def fetch_poi_payload(poi_id: int) -> Optional[dict]:
+    """Pull a single map_point (POI) by id for post composition.
+
+    Calls /v1/api/research/poi/{id}/for-post which returns the same
+    `{poi: {...}}` dict shape as the legacy /next-poi-for-post but
+    targeted at one specific id chosen by the backend's
+    RebuildSocialQueue (rebuildPOICandidates).
+
+    Returns the inner `poi` dict on success, None on 404 (POI
+    deleted / inactive — caller should report failed_permanent).
+    """
+    if not is_configured():
+        return None
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as http:
+        resp = await http.get(
+            f"{_base()}/v1/api/research/poi/{poi_id}/for-post",
+            headers=_headers(),
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        body = resp.json()
+    return body.get("poi")
 
 
 async def fetch_city_event_payload(city_event_id: int) -> Optional[dict]:

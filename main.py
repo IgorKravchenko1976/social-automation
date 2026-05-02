@@ -292,6 +292,24 @@ def _setup_scheduler() -> None:
                 "[city-pulse] Hand-off publisher every 15 min "
                 "(backend-driven queue, batch=3)"
             )
+
+            # POI hand-off runs independently every 60 min. Backend
+            # anti-burst keeps it from flooding (same point_type in
+            # same city in last 6h gets a -5 score penalty). Slot
+            # system continues to fire POI in slot 2 / web_news
+            # fallbacks — the two paths share the
+            # map_point_details.posted_to_social_at flag for dedup.
+            if getattr(settings, "use_handoff_api_poi", True):
+                from scheduler.poi_handoff_publisher import publish_poi_via_handoff
+                scheduler.add_job(
+                    publish_poi_via_handoff,
+                    "interval", minutes=60,
+                    id="poi_handoff_publisher", replace_existing=True,
+                )
+                logger.info(
+                    "[poi] Hand-off publisher every 60 min "
+                    "(backend-driven queue, batch=1)"
+                )
         else:
             from scheduler.city_pulse_post_creator import process_city_pulse_post
             from scheduler.publisher import publish_city_pulse_queue
