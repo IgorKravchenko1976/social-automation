@@ -92,10 +92,46 @@ async def generate_image_dalle(prompt: str) -> Optional[str]:
         return None
 
 
+# Minimum bytes for a "real" raster image. Wikipedia/Wikimedia and Google
+# Places sometimes return tiny SVG logos (~400 B) or 1×1 placeholder JPEGs.
+# Telegram/Facebook/Instagram all reject these as IMAGE_PROCESS_FAILED /
+# Invalid parameter. 5 KB is a safe floor for a legitimate landscape photo.
+_MIN_IMAGE_BYTES = 5 * 1024
+
+
+def _detect_image_format(payload: bytes) -> Optional[str]:
+    """Return 'jpg' / 'png' / 'webp' if magic bytes match, else None.
+
+    Social platforms only accept raster formats. SVG/HEIC/AVIF/etc. are
+    rejected upstream — we filter them out here so we never store a file
+    that the publish step is doomed to fail on.
+    """
+    if len(payload) < 12:
+        return None
+    if payload[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if payload[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
 async def download_image_from_url(url: str) -> Optional[str]:
     """Download an image from a direct URL (e.g. Wikipedia/Wikimedia).
 
-    Returns local file path or None.
+    Returns local file path or None. Rejects SVG, files smaller than
+    _MIN_IMAGE_BYTES and any payload whose magic bytes are not a raster
+    format that Telegram/Facebook/Instagram all accept.
+
+    Why so strict (incident 2026-05-02):
+      Wikidata's `imageUrl` for McDonald's returned a 389-byte SVG logo.
+      We saved it as poi_*.jpg and shipped it to all 3 platforms; every
+      one rejected the file (TG: IMAGE_PROCESS_FAILED, FB: Invalid
+      parameter, IG: Could not get public URL). The POI handoff then
+      retried the same point hourly, blocking 5 regular slots from
+      publishing. Better: reject the bad image at download time, let the
+      pipeline fall back to text-only (or skip Instagram).
     """
     if not url or not url.startswith("http"):
         return None
@@ -109,21 +145,40 @@ async def download_image_from_url(url: str) -> Optional[str]:
                 logger.warning("[media] Download failed (%d) for %s", resp.status_code, url[:100])
                 return None
 
-            content_type = resp.headers.get("content-type", "")
+            content_type = resp.headers.get("content-type", "").lower()
+            if "svg" in content_type:
+                logger.warning(
+                    "[media] Rejecting SVG image (not supported by social platforms): %s",
+                    url[:100],
+                )
+                return None
             if not any(t in content_type for t in ("image/", "octet-stream")):
                 logger.warning("[media] Not an image (%s): %s", content_type, url[:100])
                 return None
 
-            ext = "jpg"
-            if "png" in content_type:
-                ext = "png"
-            elif "webp" in content_type:
-                ext = "webp"
+            payload = resp.content
+            if len(payload) < _MIN_IMAGE_BYTES:
+                logger.warning(
+                    "[media] Rejecting tiny image (%d B < %d B floor): %s",
+                    len(payload), _MIN_IMAGE_BYTES, url[:100],
+                )
+                return None
 
-            filename = f"poi_{uuid.uuid4().hex[:8]}.{ext}"
+            fmt = _detect_image_format(payload)
+            if fmt is None:
+                logger.warning(
+                    "[media] Unsupported image format (magic=%s, content-type=%s): %s",
+                    payload[:8].hex(), content_type, url[:100],
+                )
+                return None
+
+            filename = f"poi_{uuid.uuid4().hex[:8]}.{fmt}"
             filepath = _get_media_dir() / filename
-            filepath.write_bytes(resp.content)
-            logger.info("[media] Downloaded real image: %s (%d KB)", filename, len(resp.content) // 1024)
+            filepath.write_bytes(payload)
+            logger.info(
+                "[media] Downloaded real image: %s (%d KB, format=%s)",
+                filename, len(payload) // 1024, fmt,
+            )
             return str(filepath)
     except Exception:
         logger.warning("[media] Failed to download image from %s", url[:100], exc_info=True)

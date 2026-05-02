@@ -67,6 +67,7 @@ async def _run_migrations(conn) -> None:
         ("posts", "pipeline_log", "TEXT"),
         ("posts", "poi_point_id", "INTEGER"),
         ("posts", "backend_event_id", "INTEGER"),
+        ("posts", "handoff_id", "INTEGER"),
         ("posts", "ticket_url", "VARCHAR(2000)"),
         ("messages", "thread_id", "VARCHAR(500)"),
         ("messages", "view_count", "INTEGER DEFAULT 0"),

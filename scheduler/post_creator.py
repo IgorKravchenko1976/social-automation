@@ -336,7 +336,9 @@ def _is_generic_poi_name(poi: dict) -> bool:
     return False
 
 
-async def prepare_local_post_for_poi(poi: dict) -> tuple[Optional[int], str]:
+async def prepare_local_post_for_poi(
+    poi: dict, handoff_id: Optional[int] = None,
+) -> tuple[Optional[int], str]:
     """Run quality gates → create Post + Publications for one POI payload.
 
     Sibling of city_pulse_post_creator.prepare_local_post_for_event but
@@ -347,6 +349,11 @@ async def prepare_local_post_for_poi(poi: dict) -> tuple[Optional[int], str]:
     Returns (post_id, "") on success, (None, reason) on a quality-gate
     skip or db error. The reason string is suitable for sending back to
     the backend as /report-result.reason.
+
+    `handoff_id` is the backend social_post_handoff.id for this batch
+    item. Storing it on Post lets count_published_today() distinguish
+    handoff bursts from regular slot publications, so handoff posts
+    don't suppress the 5 daily slots.
 
     Differences from _create_poi_spotlight_post:
       - No retry loop here (the hand-off API already handed us a single
@@ -407,6 +414,7 @@ async def prepare_local_post_for_poi(poi: dict) -> tuple[Optional[int], str]:
                 place_name=poi.get("name", "")[:500],
                 poi_point_id=point_id,
                 image_path=image_path,
+                handoff_id=handoff_id,
             )
             post.log_pipeline("topic", "ok",
                               f"POI #{point_id}: {poi.get('name','')[:80]} ({poi.get('city','')})")
