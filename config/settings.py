@@ -86,6 +86,16 @@ class Settings(BaseSettings):
     imin_backend_api_base: str = ""
     imin_backend_sync_key: str = ""
 
+    # Use the new social hand-off API (/v1/api/social/next-batch +
+    # report-result) for City Pulse instead of the legacy
+    # next-city-event-for-post + mark-city-event-posted pair. The
+    # hand-off API moves all dedup / queue / retry logic to the
+    # backend and turned out to be the right fix for the recurring
+    # "no posts again" outages — see incidents-lessons.mdc 2026-05-02.
+    # Default true. Set to false to revert to the legacy publisher
+    # if the new pipeline misbehaves.
+    use_handoff_api: bool = True
+
     # Web search AI for POI research (fallback chain: Perplexity -> Tavily -> Brave)
     perplexity_api_key: str = ""
     tavily_api_key: str = ""
