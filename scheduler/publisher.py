@@ -410,7 +410,16 @@ async def _cleanup_post_media(session: AsyncSession, post: Post) -> None:
 # ---------------------------------------------------------------------------
 
 async def count_published_today() -> int:
-    """Count distinct scheduled posts published today (excludes city_pulse)."""
+    """Count distinct REGULAR-SLOT posts published today.
+
+    Excludes city_pulse (own queue) and any post that came from a backend
+    hand-off batch (handoff_id IS NOT NULL). Without the handoff filter,
+    a single bursty POI hand-off cycle would push the count past
+    `time_slot` and make _publish_scheduled_post_inner SKIP slots 0-4
+    for the rest of the day — exactly what happened on 2026-05-02 when 4
+    POI handoffs (incl. 2 broken McDonald's posts) suppressed every
+    web_news / leisure_travel / feature slot.
+    """
     today_start_utc = get_today_start_utc()
     async with async_session() as session:
         result = await session.execute(
@@ -420,6 +429,7 @@ async def count_published_today() -> int:
                 Post.created_at >= today_start_utc,
                 Publication.status == PostStatus.PUBLISHED,
                 Post.source != "city_pulse",
+                Post.handoff_id.is_(None),
             )
         )
         return result.scalar() or 0

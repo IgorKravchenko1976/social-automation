@@ -309,12 +309,19 @@ def _format_city_event_for_post(event: dict) -> tuple[str, str]:
 # so the local Post + Publications structure stays consistent across
 # both code paths during the rollout.
 
-async def prepare_local_post_for_event(event: dict) -> tuple[Optional[int], str]:
+async def prepare_local_post_for_event(
+    event: dict, handoff_id: Optional[int] = None,
+) -> tuple[Optional[int], str]:
     """Run quality gates → download thumbnail → create Post + Publications.
 
     Returns (post_id, ""). On any reject returns (None, reason). The
     `reason` string is suitable for sending back to the backend as
     handoff /report-result.reason or to the legacy mark-posted error.
+
+    `handoff_id` (added 2026-05-02) is the backend social_post_handoff
+    row id when this Post comes from the hand-off path. Stored on Post
+    so count_published_today() can ignore handoff posts and not
+    suppress regular slots.
 
     NOTE: This helper performs side effects (DB INSERT, image download)
     only when the event passes all gates, so failures are cheap.
@@ -366,6 +373,7 @@ async def prepare_local_post_for_event(event: dict) -> tuple[Optional[int], str]
                 longitude=lon,
                 place_name=(event.get("venueName") or "")[:500],
                 poi_point_id=city_event_id,
+                handoff_id=handoff_id,
             )
             post.log_pipeline(
                 "topic", "ok",

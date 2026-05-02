@@ -142,7 +142,7 @@ async def _process_handoff_item(item: handoff_client.HandoffItem) -> bool:
         )
         return False
 
-    post_id, reject_reason = await prepare_local_post_for_event(event)
+    post_id, reject_reason = await prepare_local_post_for_event(event, handoff_id=item.handoff_id)
     if reject_reason == "already_queued_locally":
         # Local Post + Publications already exist for this event from a
         # previous cycle (probably a crash mid-publish). Defer: let
@@ -260,7 +260,7 @@ async def _process_poi_handoff(item: handoff_client.HandoffItem) -> bool:
 
     from scheduler.post_creator import prepare_local_post_for_poi
 
-    post_id, reject_reason = await prepare_local_post_for_poi(poi)
+    post_id, reject_reason = await prepare_local_post_for_poi(poi, handoff_id=item.handoff_id)
     if reject_reason:
         # Quality gate failures (generic_name, no_description_no_wiki,
         # low_rating) are structural — same POI today and tomorrow has

@@ -4,6 +4,58 @@ Reverse-chronological log of all agent work sessions. Each entry documents what 
 
 ---
 
+## 2026-05-02 — Fix: SVG-as-jpg loop + handoff bursts blocking regular slots
+
+**Branch**: feature/poi-handoff-consumer (worktree: main checkout)
+**Scope**: media validation / POI handoff / slot accounting
+**Triggering symptom**: zero TG/FB/IG posts published for the 08:00, 10:00 and 12:00 slots; the same broken `Макдональдз — Kyiv` POI hand-off cycled hourly with `IMAGE_PROCESS_FAILED` / `Invalid parameter` / `Could not get public URL`.
+
+### Root cause analysis (3 systemic bugs, not 1)
+
+1. **`download_image_from_url` accepted SVG (and tiny) payloads.** Wikidata's `imageUrl` for McDonald's was a 389-byte SVG logo. Content-type `image/svg+xml` matched the lax `image/` filter, file was stored as `poi_*.jpg`, then every social platform rejected it. POI handoff reported `failed_transient`, backend handed the SAME POI back next hour → infinite SVG retry loop.
+2. **`count_published_today()` counted POI hand-off posts as if they were regular slots.** After 4 handoff posts (incl. 2 broken McDonald's), `published_count >= 4` made `_publish_scheduled_post_inner` SKIP every regular slot for the day (`Slot 2 SKIPPED: already 4 post(s) published today`). Slots 0/1/2/3/4 (web_news/leisure/feature) never ran.
+3. (Pre-existing, unchanged) `CATCHUP === No missed slots (published=4, past_slots=3)` masks the real problem because it sums all PUBLISHED posts instead of checking each slot's queue.
+
+### Fixes (systemic, not local)
+
+#### `content/media.py` — strict image validation
+
+- Reject `Content-Type` containing `svg`.
+- Floor: `_MIN_IMAGE_BYTES = 5 KB` (real landscape photos are ≥5 KB; logos / 1×1 placeholders are not).
+- Magic-byte check: only `JPEG (FF D8 FF)`, `PNG (89 50 4E 47 ...)`, `WebP (RIFF ... WEBP)` accepted; anything else → reject. Stored extension is now derived from the magic bytes, not the (often-wrong) URL extension.
+- Result: McDonald's SVG path now returns `None` → publisher sees no `image_path` → POI is published text-only on TG+FB; IG is skipped with `instagram_requires_image` (a permanent reason already in `_PERMANENT_FAILURE_MARKERS`). At least one platform succeeds → `_try_publish_post` returns True → handoff reported as `published` → backend marks POI posted → no more loop.
+
+#### `db/models.py` + `db/database.py` — track handoff origin on Post
+
+- New nullable column `posts.handoff_id INTEGER` (auto-applied by `_run_migrations` ALTER TABLE on next start; safe — Postgres supports `IF NOT EXISTS`).
+- Stores the backend `social_post_handoff.id` for posts created from the hand-off pipeline; NULL for regular scheduled-slot posts.
+
+#### `scheduler/post_creator.py` + `scheduler/city_pulse_post_creator.py` — write handoff_id
+
+- `prepare_local_post_for_poi(poi, handoff_id=...)` and `prepare_local_post_for_event(event, handoff_id=...)` now accept and persist `handoff_id`. Default `None` keeps the legacy `process_city_pulse_post()` path unchanged.
+
+#### `scheduler/city_pulse_handoff_publisher.py` — pass through handoff_id
+
+- Both `_process_handoff_item` (city_pulse) and `_process_poi_handoff` (POI) now forward `item.handoff_id` to the post-creator helpers.
+
+#### `scheduler/publisher.py` — exclude handoff posts from slot accounting
+
+- `count_published_today()` now adds `Post.handoff_id IS NULL` to the WHERE clause. Result: handoff bursts (POI / city_pulse) no longer "consume" a slot's quota. The 5 daily slots run on their own schedule regardless of how many handoff posts published that day.
+
+### Why this is a one-shot fix, not a band-aid
+
+- Even if a future POI source returns another bad image (HEIC, AVIF, broken JPEG header), the magic-byte check rejects it before the file ever reaches the platform adapters.
+- Even if a handoff cycle publishes 20 POIs in one hour, the 5 regular slots still fire because the accounting filter is structural, not heuristic.
+- No DB-level workarounds, no "dedup the McDonald's title" hacks.
+
+### Operational steps after deploy
+
+1. On prod, mark the two stuck QUEUED posts (454, 455) FAILED so the publisher loop unblocks.
+2. Restart the bot container so the new column is added by `_run_migrations` and the new code is loaded.
+3. Trigger `publish_missed_slots()` to backfill today's regular slots that were skipped.
+
+---
+
 ## 2026-05-02 — POI hand-off consumer (separate cadence + lock)
 
 **Branch**: main (MR !16) → bot (MR !17), pipeline 2494820712 success
