@@ -417,6 +417,17 @@ class AirportTask:
     priority: float = 0
     facility_type: str = "airport"
     operational_status: str = "unknown"
+    # ── Phase 1 of airport image classification plan ──
+    # size_class is the OBJECT size dimension of the airport
+    # ('hub'|'intl'|'regional'|'small'|'unknown'). Sourced from
+    # airports.size_class on the backend (heuristic + bot-overridable).
+    size_class: str = "unknown"
+    # classification_key is the (facility_type, size_class) → enum
+    # produced by handler.ClassificationKey on the backend. The bot
+    # treats this as the authoritative key for default-image lookup
+    # and DALL-E prompt selection. If empty (older backend), bot
+    # falls back to local Python mirror in geo_agent.airport_classification.
+    classification_key: str = ""
 
 
 async def fetch_next_airport() -> Optional[AirportTask]:
@@ -443,6 +454,8 @@ async def fetch_next_airport() -> Optional[AirportTask]:
         priority=data.get("priority", 0),
         facility_type=data.get("facilityType", "airport"),
         operational_status=data.get("operationalStatus", "unknown"),
+        size_class=data.get("sizeClass", "unknown"),
+        classification_key=data.get("classificationKey", ""),
     )
 
 
@@ -454,8 +467,14 @@ async def submit_airport_result(
     name_translations: dict | None = None,
     operational_status: str = "",
     status_reason: str = "",
+    size_class: str = "",
 ) -> bool:
-    """POST /v1/api/research/airport-result — submit research result for an airport."""
+    """POST /v1/api/research/airport-result — submit research result for an airport.
+
+    size_class: optional bot classification ('hub'|'intl'|'regional'|'small').
+    Empty string → backend keeps existing column value (NULLIF/COALESCE).
+    Pass when AI research yielded a confident estimate of airport size.
+    """
     if not is_configured():
         return False
 
@@ -472,6 +491,8 @@ async def submit_airport_result(
         payload["operationalStatus"] = operational_status
     if status_reason:
         payload["statusReason"] = status_reason
+    if size_class:
+        payload["sizeClass"] = size_class
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         resp = await client.post(
