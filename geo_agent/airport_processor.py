@@ -150,12 +150,23 @@ async def _process_one_airport() -> bool:
         event_id = resp.get("eventId", 0)
         content_json = json.dumps(result, ensure_ascii=False)
 
+        # Phase 1 of airport image classification plan: pass through
+        # size_class when AI yielded a confident estimate. Empty string
+        # (research didn't include the field, e.g. older prompt) →
+        # backend keeps existing value via NULLIF/COALESCE; no impact.
+        bot_size_class = ""
+        if isinstance(result.get("size_class"), str):
+            sc = result["size_class"].strip().lower()
+            if sc in {"hub", "intl", "regional", "small"}:
+                bot_size_class = sc
+
         await backend_client.submit_airport_result(
             airport_id=task.airport_id,
             content=content_json[:10000],
             event_id=event_id,
             name_translations=name_translations,
             operational_status=task.operational_status,
+            size_class=bot_size_class,
         )
 
         await _log_audit(
@@ -184,20 +195,42 @@ async def _process_one_airport() -> bool:
         return False
 
 
+# Phase 1 of airport image classification plan: keys are now
+# classification_key (airport_hub / airport_intl / etc.) instead of raw
+# facility_type. Lets us differentiate visual style by airport size:
+# major hubs get glossy modern terminals; regional airports get smaller
+# functional buildings; small airports get single-runway airfield imagery.
+# See ../airport_classification.py for the (facility_type, size_class)
+# → key mapping.
 _DALLE_PROMPT_TEMPLATES = {
-    "airport": (
-        "Photorealistic aerial view of {name} airport in {city}, {country}. "
-        "Modern terminal building, runways, surrounding landscape typical for {country}. "
+    "airport_hub": (
+        "Photorealistic aerial view of {name}, a major international airport hub "
+        "serving {city}, {country}. Multiple long runways, large modern terminal "
+        "complex with glass facades and air bridges, several wide-body aircraft "
+        "parked at gates, control tower. Bright daylight, sharp detail, "
+        "professional aviation photography style."
+    ),
+    "airport_intl": (
+        "Photorealistic aerial view of {name}, an international airport in {city}, "
+        "{country}. Modern terminal building, two runways, mid-size aircraft on "
+        "taxiways, surrounding landscape typical for {country}. Bright daylight, "
+        "professional travel photography style."
+    ),
+    "airport_regional": (
+        "Photorealistic view of {name}, a regional airport serving {city}, "
+        "{country}. Single runway, modest terminal building, regional jets and "
+        "turboprop aircraft, surrounding landscape typical for {country}. "
+        "Bright daylight, professional travel photography style."
+    ),
+    "airport_small": (
+        "Photorealistic view of {name}, a small airport near {city}, {country}. "
+        "Single short runway, small terminal building, light aircraft and a few "
+        "small turboprops, surrounding landscape typical for {country}. "
         "Bright daylight, professional travel photography style."
     ),
     "aerodrome": (
         "Photorealistic view of {name} aerodrome near {city}, {country}. "
         "Small airfield with light aircraft, hangars, local landscape. "
-        "Bright daylight, professional travel photography style."
-    ),
-    "railway": (
-        "Photorealistic view of {name} railway station in {city}, {country}. "
-        "Station building, platforms, trains, architectural details typical for the region. "
         "Bright daylight, professional travel photography style."
     ),
     "heliport": (
@@ -210,18 +243,41 @@ _DALLE_PROMPT_TEMPLATES = {
         "Aviation facility, historical significance, surrounding landscape. "
         "Bright daylight, professional aerial photography style."
     ),
+    "railway_hub": (
+        "Photorealistic exterior view of {name}, a major railway hub in {city}, "
+        "{country}. Grand historic station building, multiple platforms with "
+        "intercity trains, glass and steel canopy, busy with travellers. "
+        "Bright daylight, professional travel photography style."
+    ),
+    "railway": (
+        "Photorealistic view of {name} railway station in {city}, {country}. "
+        "Station building, platforms, trains, architectural details typical "
+        "for the region. Bright daylight, professional travel photography style."
+    ),
     "bus": (
         "Photorealistic view of {name} bus station in {city}, {country}. "
         "Bus terminal building, platforms, local architecture and landscape. "
         "Bright daylight, professional travel photography style."
     ),
+    "transport": (
+        "Photorealistic view of {name}, a transport hub in {city}, {country}. "
+        "Functional building with passenger areas, surrounding landscape "
+        "typical for {country}. Bright daylight, professional travel "
+        "photography style."
+    ),
 }
 
 
 def _build_dalle_prompt(task, result: dict) -> str:
-    """Build a location-specific DALL-E prompt for unique image generation."""
-    ft = task.facility_type or "airport"
-    template = _DALLE_PROMPT_TEMPLATES.get(ft, _DALLE_PROMPT_TEMPLATES["airport"])
+    """Build a location-specific DALL-E prompt for unique image generation.
+
+    Selects template by classification_key (preferred — backend-supplied
+    via /next-airport) with local Python fallback when missing.
+    """
+    from geo_agent.airport_classification import resolve_classification_key
+
+    key = resolve_classification_key(task)
+    template = _DALLE_PROMPT_TEMPLATES.get(key, _DALLE_PROMPT_TEMPLATES["transport"])
 
     name = task.name or result.get("title", "Transport hub")
     city = task.city or result.get("city", "")
